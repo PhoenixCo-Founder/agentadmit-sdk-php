@@ -19,4 +19,8 @@ return [
     // Token prefixes
     'token_prefix_access' => 'ag_at_',
     'token_prefix_connection' => 'ag_ct_',
+
+    // Rate limiting — introspection retry policy
+    // Max retries on HTTP 429 before throwing RateLimitException. Default: 3.
+    'max_retries' => (int) env('AGENTADMIT_MAX_RETRIES', 3),
 ];
