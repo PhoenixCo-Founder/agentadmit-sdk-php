@@ -8,7 +8,7 @@
  */
 
 return [
-    // From your AgentAdmit dashboard (app.agentadmit.com)
+    // From your AgentAdmit dashboard (agentadmit.com)
     'app_id' => env('AGENTADMIT_APP_ID', ''),
     'api_key' => env('AGENTADMIT_API_KEY', ''),
 
