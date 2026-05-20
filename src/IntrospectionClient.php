@@ -45,11 +45,10 @@ class IntrospectionClient
             try {
                 $response = Http::timeout(5)
                     ->withHeaders([
-                        'Authorization' => 'Bearer ' . $token,
-                        'X-App-Id' => $this->config['app_id'] ?? '',
-                        'X-Api-Key' => $this->config['api_key'] ?? '',
+                        'Authorization' => 'Bearer ' . ($this->config['api_key'] ?? ''),
+                        'Content-Type' => 'application/json',
                     ])
-                    ->post($verifyUrl);
+                    ->post($verifyUrl, ['token' => $token]);
             } catch (\Exception $e) {
                 Log::error('AgentAdmit introspection failed: ' . $e->getMessage());
                 throw new AgentAdmitException('Introspection failed: ' . $e->getMessage(), 502);
