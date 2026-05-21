@@ -107,6 +107,14 @@ class IntrospectionClient
 
                 $data = $response->json();
 
+                // Check active flag (RFC 7662 introspection pattern).
+                // The verify endpoint returns {active: false} with HTTP 200 for invalid/
+                // expired/revoked tokens. Without this check, we'd read empty scopes.
+                if (empty($data['active'])) {
+                    $reason = $data['error'] ?? 'invalid_token';
+                    throw new AgentAdmitException('Token is not active: ' . $reason, 401);
+                }
+
                 if (empty($data['user_id'])) {
                     throw new AgentAdmitException('Introspection returned no user', 401);
                 }
