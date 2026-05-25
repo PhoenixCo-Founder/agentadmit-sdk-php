@@ -129,3 +129,33 @@ For complete compliance guidance, see our [compliance guide](https://agentadmit.
 ## License
 
 All rights reserved. Patent pending.
+
+## Security Alerts
+
+```php
+use AgentAdmit\AlertsClient;
+$alerts = new AlertsClient(config('agentadmit'));
+```
+
+Six alert type constants on `AlertsClient`. 
+
+### Configure
+
+```php
+$alerts->configureAlerts('app_abc123', AlertsClient::ALERT_TYPE_VOLUME_SPIKE, [
+    'enabled' => true, 'threshold_value' => 100, 'threshold_window_minutes' => 5,
+    'kill_switch_enabled' => true,
+]);
+```
+
+### List Events
+
+```php
+$events = $alerts->listAlerts(appId: 'app_abc123', alertType: AlertsClient::ALERT_TYPE_VOLUME_SPIKE);
+```
+
+### Get Config
+
+```php
+$config = $alerts->getAlertConfig(appId: 'app_abc123');
+```
