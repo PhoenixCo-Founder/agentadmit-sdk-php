@@ -1,0 +1,43 @@
+{
+  "name": "agentadmit/agentadmit-sdk",
+  "description": "AgentAdmit SDK for PHP — User-mediated AI agent authorization for Laravel",
+  "type": "library",
+  "license": "proprietary",
+  "version": "1.0.0",
+  "authors": [
+    {
+      "name": "Christopher Emerson",
+      "homepage": "https://agentadmit.com"
+    }
+  ],
+  "require": {
+    "php": ">=8.1",
+    "guzzlehttp/guzzle": "^7.0",
+    "illuminate/support": "^10.0|^11.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "AgentAdmit\\": "src/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "AgentAdmit\\AgentAdmitServiceProvider"
+      ]
+    }
+  },
+  "keywords": [
+    "agentadmit",
+    "ai-agent",
+    "authorization",
+    "auth",
+    "laravel",
+    "middleware"
+  ],
+  "homepage": "https://agentadmit.com",
+  "support": {
+    "docs": "https://agentadmit.com/docs/app-owner-guide"
+  },
+  "minimum-stability": "stable"
+}
