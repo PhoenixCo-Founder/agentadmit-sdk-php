@@ -11,11 +11,30 @@ use Illuminate\Support\Facades\Log;
  */
 class IntrospectionClient
 {
+    /**
+     * Error codes /api/v1/verify returns with HTTP 200 and active: false
+     * (insufficient_scope arrives with active: true — token valid, scope not
+     * granted). Unknown codes pass through unchanged.
+     */
+    public const ERROR_INVALID_TOKEN        = 'invalid_token';
+    public const ERROR_TOKEN_EXPIRED        = 'token_expired';
+    public const ERROR_TOKEN_REVOKED        = 'token_revoked';
+    public const ERROR_CONNECTION_REVOKED   = 'connection_revoked';
+    public const ERROR_CONNECTION_EXPIRED   = 'connection_expired';
+    public const ERROR_ENVIRONMENT_MISMATCH = 'environment_mismatch';
+    public const ERROR_INSUFFICIENT_SCOPE   = 'insufficient_scope';
+
     private array $config;
 
     public function __construct(array $config)
     {
         $this->config = $config;
+
+        // Validate the key prefix without ever echoing the key itself.
+        $apiKey = $config['api_key'] ?? '';
+        if ($apiKey !== '' && !str_starts_with($apiKey, 'aa_test_') && !str_starts_with($apiKey, 'aa_live_')) {
+            throw new AgentAdmitException("api_key must start with 'aa_test_' or 'aa_live_'", 401);
+        }
     }
 
     /**
@@ -38,7 +57,7 @@ class IntrospectionClient
         }
 
         $maxRetries = (int) ($this->config['max_retries'] ?? 3);
-        $verifyUrl  = $this->config['verify_url'] ?? 'https://api.agentadmit.com/v1/verify';
+        $verifyUrl  = $this->config['verify_url'] ?? 'https://api.agentadmit.com/api/v1/verify';
         $delayMs    = 1000; // initial backoff: 1 second (in ms)
 
         for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
@@ -108,11 +127,23 @@ class IntrospectionClient
                 $data = $response->json();
 
                 // Check active flag (RFC 7662 introspection pattern).
-                // The verify endpoint returns {active: false} with HTTP 200 for invalid/
-                // expired/revoked tokens. Without this check, we'd read empty scopes.
+                // The verify endpoint returns {active: false} with HTTP 200 for
+                // invalid/expired/revoked tokens; the error code is one of the
+                // ERROR_* constants (e.g. token_expired, connection_expired,
+                // environment_mismatch). Without this check, we'd read empty scopes.
                 if (empty($data['active'])) {
-                    $reason = $data['error'] ?? 'invalid_token';
-                    throw new AgentAdmitException('Token is not active: ' . $reason, 401);
+                    $reason = $data['error'] ?? self::ERROR_INVALID_TOKEN;
+                    throw new AgentAdmitException('Token is not active: ' . $reason, 401, $reason);
+                }
+
+                // insufficient_scope arrives with active: true (token valid,
+                // requested scope not granted) — treat it as a 403.
+                if (($data['error'] ?? null) === self::ERROR_INSUFFICIENT_SCOPE) {
+                    throw new AgentAdmitException(
+                        $data['error_description'] ?? 'Scope not granted',
+                        403,
+                        self::ERROR_INSUFFICIENT_SCOPE
+                    );
                 }
 
                 if (empty($data['user_id'])) {
@@ -124,6 +155,11 @@ class IntrospectionClient
                     connectionId: $data['connection_id'] ?? null,
                     scopes: $data['scopes'] ?? [],
                     agentLabel: $data['agent_label'] ?? 'Unknown Agent',
+                    sub: $data['sub'] ?? null,
+                    role: $data['role'] ?? null,
+                    appId: $data['app_id'] ?? null,
+                    jti: $data['jti'] ?? null,
+                    exp: isset($data['exp']) ? (int) $data['exp'] : null,
                 );
             } catch (AgentAdmitException $e) {
                 throw $e;

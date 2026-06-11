@@ -169,5 +169,47 @@ $config = $alerts->getAlertConfig(appId: 'app_abc123');
 AgentAdmit detects anomalies, fires alerts, and (with kill switch) auto-revokes connections. **How you notify your own users is up to you.** AgentAdmit provides the data — you deliver it through your own system (in-app notifications, email, push, etc.).
 
 - **Poll alerts** — Use the SDK methods above from your backend to check for new events, then notify users through your existing system.
-- **Webhook delivery (coming soon)** — Configure a webhook URL in your AgentAdmit dashboard. When an alert fires, AgentAdmit POSTs the payload to your server.
+- **Webhook delivery** — Configure a webhook URL in your AgentAdmit dashboard. When an alert fires, AgentAdmit POSTs the payload to your server, signed with your `whsec_…` secret. Always verify the signature against the raw request body before trusting the payload:
+
+  ```php
+  use AgentAdmit\Webhook;
+  use AgentAdmit\AgentAdmitException;
+
+  Route::post('/agentadmit/alerts', function (Request $request) {
+      try {
+          Webhook::verifySignature(
+              $request->getContent(),
+              $request->header('X-AgentAdmit-Signature', ''),
+              config('agentadmit.webhook_secret'), // whsec_… from AGENTADMIT_WEBHOOK_SECRET
+          );
+      } catch (AgentAdmitException $e) {
+          return response()->json(['error' => 'invalid_signature'], 400);
+      }
+      $event = $request->json()->all();
+      // ...
+  });
+  ```
+
+  The header format is `t=<unix_ts>,v1=<hex>` — an HMAC-SHA256 of `{t}.{rawBody}` keyed with your signing secret. Verification uses `hash_equals()` (constant time) and rejects timestamps more than 5 minutes off (replay protection).
 - **React SDK** — Embed the `<AlertsPanel>` component so users can view their own alert history and tighten thresholds.
+
+### Issuing & Exchanging Tokens
+
+```php
+use AgentAdmit\TokensClient;
+
+$tokens = app(TokensClient::class);
+
+// Duration is tri-state:
+//   omit the argument                     → AgentAdmit default (30 days)
+//   null                                  → until the user revokes
+//   int seconds (60–31536000)             → explicit duration
+$issued = $tokens->issueToken('user_42', ['read:orders'], role: 'user', durationSeconds: null);
+$connectionToken = $issued['token']; // ag_ct_…
+
+// Agent side — no API key needed; the connection token is the credential.
+$granted = $tokens->exchange($connectionToken, agentLabel: 'MyAssistant');
+
+// Revoke when the user disconnects the agent.
+$tokens->revoke($granted['connection_id'], reason: 'user_requested');
+```

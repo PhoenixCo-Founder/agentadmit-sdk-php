@@ -27,6 +27,10 @@ class AgentAdmitServiceProvider extends ServiceProvider
         $this->app->singleton(IntrospectionClient::class, function ($app) {
             return new IntrospectionClient(config('agentadmit'));
         });
+
+        $this->app->singleton(TokensClient::class, function ($app) {
+            return new TokensClient(config('agentadmit'));
+        });
     }
 
     public function boot(): void
