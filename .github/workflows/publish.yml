@@ -1,0 +1,58 @@
+# Release validation for agentadmit/agentadmit-sdk (Packagist)
+#
+# Packagist has no publish step — it syncs straight from git tags via the
+# GitHub webhook. This workflow only gates the tag: it validates
+# composer.json, lints, and runs the test suite, so a broken tag is caught
+# before Packagist picks it up.
+#
+# Prerequisites (one-time setup):
+#   1. Submit the repo once at packagist.org/packages/submit
+#      (package name: agentadmit/agentadmit-sdk)
+#   2. Connect the PhoenixCo-Founder GitHub account on Packagist so the
+#      auto-update webhook is installed (Settings → GitHub integration),
+#      or add the Packagist webhook to this repo manually.
+#   3. After that, pushing a v* tag IS the release.
+#
+# Trigger: push a version tag (e.g., git tag v1.0.0 && git push --tags)
+# Action versions are pinned to exact SHAs per supply chain policy.
+
+name: Validate release tag
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
+        with:
+          php-version: '8.2'
+
+      - name: Check tag matches composer.json version
+        run: |
+          pkg="v$(php -r 'echo json_decode(file_get_contents("composer.json"))->version;')"
+          if [ "$pkg" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match composer.json version $pkg" >&2
+            exit 1
+          fi
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Lint
+        run: |
+          for f in $(find src config tests -name '*.php'); do php -l "$f" > /dev/null; done
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Run tests
+        run: vendor/bin/phpunit --no-coverage
