@@ -3,7 +3,7 @@
   "description": "AgentAdmit SDK for PHP — User-mediated AI agent authorization for Laravel",
   "type": "library",
   "license": "proprietary",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "authors": [
     {
       "name": "Christopher Emerson",
