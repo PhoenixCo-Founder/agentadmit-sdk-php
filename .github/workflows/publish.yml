@@ -36,11 +36,12 @@ jobs:
         with:
           php-version: '8.2'
 
-      - name: Check tag matches composer.json version
+      # composer.json intentionally has no "version" field — Packagist derives
+      # the version from the git tag itself, so only the tag format is checked.
+      - name: Check tag format
         run: |
-          pkg="v$(php -r 'echo json_decode(file_get_contents("composer.json"))->version;')"
-          if [ "$pkg" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match composer.json version $pkg" >&2
+          if ! printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Tag $GITHUB_REF_NAME is not a valid release tag (expected vMAJOR.MINOR.PATCH)" >&2
             exit 1
           fi
 
