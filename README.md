@@ -9,7 +9,7 @@ User-mediated AI agent authorization. Plug-and-play for any Laravel app.
 
 ```bash
 composer require agentadmit/laravel
-php artisan vendor:publish --tag=agentadmit
+php artisan vendor:publish --tag=agentadmit-config
 ```
 
 Add your credentials to `.env`:
@@ -23,7 +23,7 @@ Add scope enforcement to any route:
 
 ```php
 // routes/api.php
-Route::middleware('agentadmit:read:orders')->get('/orders', [OrderController::class, 'index']);
+Route::middleware('agentadmit.scope:read:orders')->get('/orders', [OrderController::class, 'index']);
 ```
 
 Your app now supports AI agent connections with:
@@ -31,8 +31,7 @@ Your app now supports AI agent connections with:
 - User-controlled connection duration
 - Token generation and exchange
 - Mandatory introspection (every agent request validated through AgentAdmit)
-- Revocation and audit logging
-- Discovery endpoint at `/.well-known/agentadmit`
+- Revocation and remote audit logging (via the AgentAdmit hosted service)
 
 ## How It Works
 
@@ -48,7 +47,7 @@ The token goes to the human, not the agent. No automated delivery = no prompt in
 
 **Mandatory introspection.** All token validation goes through api.agentadmit.com. There is no self-hosted mode. No local JWT validation. No bypass. This is required for security, audit logging, and scope enforcement.
 
-**Admin revocation.** As the app operator, you can revoke any user's agent connection via `DELETE /agentadmit/admin/connections/{connection_id}` (requires admin role or `manage:connections` scope).
+**Admin revocation.** As the app operator, you can revoke any user's agent connection by calling `TokensClient::revoke($connectionId)` from your backend (requires your operator API key).
 
 **Embeddable admin panel.** Drop the `<AgentAdmitAdminPanel>` React component into your admin section to view all agent connections, usage metrics, billing status, and revoke any connection without leaving your app. See the React SDK for details.
 
@@ -56,7 +55,7 @@ The token goes to the human, not the agent. No automated delivery = no prompt in
 
 ## Rate Limiting
 
-The AgentAdmit introspection endpoint enforces rate limits. The PHP SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter — no changes needed in your middleware code.
+The AgentAdmit introspection endpoint enforces rate limits. The PHP SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  -  no changes needed in your middleware code.
 
 ### Retry behavior
 
@@ -68,7 +67,7 @@ The AgentAdmit introspection endpoint enforces rate limits. The PHP SDK handles 
 | Jitter | 0–500 ms | Random addition to each delay |
 | Max retries | **3** | Configurable |
 
-The SDK also respects the `Retry-After` response header — if present, it overrides the computed backoff delay.
+The SDK also respects the `Retry-After` response header  -  if present, it overrides the computed backoff delay.
 
 ### Configuring max retries
 
@@ -99,10 +98,10 @@ try {
 ```
 
 `RateLimitException` methods:
-- `getRetryAfter()` — seconds from `Retry-After` header (`null` if absent)
-- `getLimit()` — `X-RateLimit-Limit` header value (`null` if absent)
-- `getRemaining()` — `X-RateLimit-Remaining` header value (`null` if absent)
-- `getReset()` — `X-RateLimit-Reset` Unix timestamp (`null` if absent)
+- `getRetryAfter()`  -  seconds from `Retry-After` header (`null` if absent)
+- `getLimit()`  -  `X-RateLimit-Limit` header value (`null` if absent)
+- `getRemaining()`  -  `X-RateLimit-Remaining` header value (`null` if absent)
+- `getReset()`  -  `X-RateLimit-Reset` Unix timestamp (`null` if absent)
 
 ## Documentation
 
@@ -114,14 +113,14 @@ Full integration guide: https://agentadmit.com/docs/app-owner-guide
 The AgentAdmit PHP SDK runs server-side and does not interact with app stores or end-user devices directly.
 
 ### What the SDK does
-- Validates AgentAdmit tokens by calling AgentAdmit's hosted introspection endpoint (`https://api.agentadmit.com/api/v1/verify`) on every agent request — this is mandatory introspection; there is no local or offline validation mode
+- Validates AgentAdmit tokens by calling AgentAdmit's hosted introspection endpoint (`https://api.agentadmit.com/api/v1/verify`) on every agent request  -  this is mandatory introspection; there is no local or offline validation mode
 - Enforces scope-based access control on your API routes
-- Manages connection lifecycle (create, revoke, audit) using your configured storage backend
+- Manages connection lifecycle (issue, exchange, revoke) via the AgentAdmit hosted service
 
 ### What the SDK does NOT do
-- Does not transmit raw end-user PII (such as name, email, or device identifiers) — each introspection request sends the opaque access token and your API key
-- Does not perform passive background telemetry or analytics — network calls occur only during active token validation
-- Does not maintain its own persistent storage — local state (connections, audit log) lives in the storage backend you configure
+- Does not transmit raw end-user PII (such as name, email, or device identifiers)  -  each introspection request sends the opaque access token and your API key
+- Does not perform passive background telemetry or analytics  -  network calls occur only during active token validation
+- Does not maintain its own persistent storage; connection state and audit logs are held by the AgentAdmit hosted service
 
 ### What the AgentAdmit hosted service records
 On every token validation, AgentAdmit's `/api/v1/verify` endpoint receives the access token and API key, resolves the token to its `user_id`, `connection_id`, granted `scopes`, and `agent_label`, and records per-call metadata (including the endpoint and timestamp) for billing, audit logging, the security alerts engine, and usage metering. This is integral to how AgentAdmit works and applies to both test and live keys. See the "Mandatory introspection" notes above and the [compliance guide](https://agentadmit.com/docs/compliance) for the full data-handling description.
@@ -168,10 +167,10 @@ $config = $alerts->getAlertConfig(appId: 'app_abc123');
 
 ### Notifying Your Users
 
-AgentAdmit detects anomalies, fires alerts, and (with kill switch) auto-revokes connections. **How you notify your own users is up to you.** AgentAdmit provides the data — you deliver it through your own system (in-app notifications, email, push, etc.).
+AgentAdmit detects anomalies, fires alerts, and (with kill switch) auto-revokes connections. **How you notify your own users is up to you.** AgentAdmit provides the data  -  you deliver it through your own system (in-app notifications, email, push, etc.).
 
-- **Poll alerts** — Use the SDK methods above from your backend to check for new events, then notify users through your existing system.
-- **Webhook delivery** — Configure a webhook URL in your AgentAdmit dashboard. When an alert fires, AgentAdmit POSTs the payload to your server, signed with your `whsec_…` secret. Always verify the signature against the raw request body before trusting the payload:
+- **Poll alerts**  -  Use the SDK methods above from your backend to check for new events, then notify users through your existing system.
+- **Webhook delivery**  -  Configure a webhook URL in your AgentAdmit dashboard. When an alert fires, AgentAdmit POSTs the payload to your server, signed with your `whsec_…` secret. Always verify the signature against the raw request body before trusting the payload:
 
   ```php
   use AgentAdmit\Webhook;
@@ -192,8 +191,8 @@ AgentAdmit detects anomalies, fires alerts, and (with kill switch) auto-revokes 
   });
   ```
 
-  The header format is `t=<unix_ts>,v1=<hex>` — an HMAC-SHA256 of `{t}.{rawBody}` keyed with your signing secret. Verification uses `hash_equals()` (constant time) and rejects timestamps more than 5 minutes off (replay protection).
-- **React SDK** — Embed the `<AlertsPanel>` component so users can view their own alert history and tighten thresholds.
+  The header format is `t=<unix_ts>,v1=<hex>`  -  an HMAC-SHA256 of `{t}.{rawBody}` keyed with your signing secret. Verification uses `hash_equals()` (constant time) and rejects timestamps more than 5 minutes off (replay protection).
+- **React SDK**  -  Embed the `<AlertsPanel>` component so users can view their own alert history and tighten thresholds.
 
 ### Issuing & Exchanging Tokens
 
@@ -209,7 +208,7 @@ $tokens = app(TokensClient::class);
 $issued = $tokens->issueToken('user_42', ['read:orders'], role: 'user', durationSeconds: null);
 $connectionToken = $issued['token']; // ag_ct_…
 
-// Agent side — no API key needed; the connection token is the credential.
+// Agent side  -  no API key needed; the connection token is the credential.
 $granted = $tokens->exchange($connectionToken, agentLabel: 'MyAssistant');
 
 // Revoke when the user disconnects the agent.
