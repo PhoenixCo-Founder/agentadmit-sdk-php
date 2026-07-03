@@ -41,6 +41,10 @@ class IntrospectionClient
         if ($apiKey !== '' && !str_starts_with($apiKey, 'aa_test_') && !str_starts_with($apiKey, 'aa_live_')) {
             throw new AgentAdmitException("api_key must start with 'aa_test_' or 'aa_live_'", 401);
         }
+
+        // M4: Require HTTPS on configurable URLs (HTTP allowed only on loopback).
+        $verifyUrl = $config['verify_url'] ?? 'https://api.agentadmit.com/api/v1/verify';
+        AgentAdmitException::assertHttpsUrl($verifyUrl, 'verify_url');
     }
 
     /**
@@ -138,7 +142,8 @@ class IntrospectionClient
                     );
                 }
 
-                if ($status !== 200) {
+                // M5: Treat any non-2xx response as a service error.
+                if ($status < 200 || $status > 299) {
                     throw new AgentAdmitException(
                         'Verification service returned ' . $status,
                         502
@@ -147,18 +152,15 @@ class IntrospectionClient
 
                 $data = $response->json();
 
-                // Check active flag (RFC 7662 introspection pattern).
-                // The verify endpoint returns {active: false} with HTTP 200 for
-                // invalid/expired/revoked tokens; the error code is one of the
-                // ERROR_* constants (e.g. token_expired, connection_expired,
-                // environment_mismatch). Without this check, we'd read empty scopes.
-                if (empty($data['active'])) {
+                // M5: Require active to be strictly the boolean true (RFC 7662).
+                // Any other value — false, 1, "true", null, missing — means invalid.
+                if (($data['active'] ?? null) !== true) {
                     $reason = $data['error'] ?? self::ERROR_INVALID_TOKEN;
                     throw new AgentAdmitException('Token is not active: ' . $reason, 401, $reason);
                 }
 
                 // insufficient_scope arrives with active: true (token valid,
-                // requested scope not granted) — treat it as a 403.
+                // requested scope not granted) - treat it as a 403.
                 if (($data['error'] ?? null) === self::ERROR_INSUFFICIENT_SCOPE) {
                     throw new AgentAdmitException(
                         $data['error_description'] ?? 'Scope not granted',
@@ -167,13 +169,12 @@ class IntrospectionClient
                     );
                 }
 
-                if (empty($data['user_id'])) {
-                    throw new AgentAdmitException('Introspection returned no user', 401);
-                }
+                // M5: Validate consumed string fields and scopes type.
+                $this->assertValidIntrospectionPayload($data);
 
                 return new IntrospectionResult(
                     userId: $data['user_id'],
-                    connectionId: $data['connection_id'] ?? null,
+                    connectionId: isset($data['connection_id']) ? (string) $data['connection_id'] : null,
                     scopes: $data['scopes'] ?? [],
                     agentLabel: $data['agent_label'] ?? 'Unknown Agent',
                     sub: $data['sub'] ?? null,
@@ -197,6 +198,49 @@ class IntrospectionClient
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * M5: Validate the introspection payload structure.
+     *
+     * Throws AgentAdmitException if required fields are missing or have the
+     * wrong type. Only called after active === true has been confirmed.
+     *
+     * Rules:
+     *  - user_id must be present and a non-empty string
+     *  - agent_id, connection_id must be strings when present
+     *  - scopes must be an array of strings when present
+     *
+     * @throws AgentAdmitException
+     */
+    private function assertValidIntrospectionPayload(array $data): void
+    {
+        // user_id is required and must be a non-empty string.
+        if (!isset($data['user_id']) || !is_string($data['user_id']) || $data['user_id'] === '') {
+            throw new AgentAdmitException('Introspection returned no user', 401);
+        }
+
+        // agent_id must be a string when present.
+        if (isset($data['agent_id']) && !is_string($data['agent_id'])) {
+            throw new AgentAdmitException('Introspection response malformed: agent_id must be a string', 502);
+        }
+
+        // connection_id must be a string when present.
+        if (isset($data['connection_id']) && !is_string($data['connection_id'])) {
+            throw new AgentAdmitException('Introspection response malformed: connection_id must be a string', 502);
+        }
+
+        // scopes must be an array of strings when present.
+        if (isset($data['scopes'])) {
+            if (!is_array($data['scopes'])) {
+                throw new AgentAdmitException('Introspection response malformed: scopes must be an array', 502);
+            }
+            foreach ($data['scopes'] as $scope) {
+                if (!is_string($scope)) {
+                    throw new AgentAdmitException('Introspection response malformed: each scope must be a string', 502);
+                }
+            }
+        }
+    }
 
     /** Sleep before the next retry. Protected so tests can record instead of sleeping. */
     protected function waitBeforeRetry(int $totalMs): void

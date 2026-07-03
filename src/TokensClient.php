@@ -23,6 +23,10 @@ class TokensClient
     public function __construct(array $config)
     {
         $this->config = $config;
+
+        // M4: Require HTTPS on configurable URLs (HTTP allowed only on loopback).
+        $apiUrl = rtrim($config['api_url'] ?? 'https://api.agentadmit.com', '/');
+        AgentAdmitException::assertHttpsUrl($apiUrl, 'api_url');
     }
 
     /**
