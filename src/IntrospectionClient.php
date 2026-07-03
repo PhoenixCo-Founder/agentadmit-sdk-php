@@ -11,6 +11,12 @@ use Illuminate\Support\Facades\Log;
  */
 class IntrospectionClient
 {
+    /** Hard cap (ms) on any single retry wait — including a server-supplied Retry-After. */
+    public const MAX_RETRY_WAIT_MS = 30000;
+
+    /** Hard cap (ms) on cumulative wait across all retries of a single verify call. */
+    public const MAX_RETRY_BUDGET_MS = 120000;
+
     /**
      * Error codes /api/v1/verify returns with HTTP 200 and active: false
      * (insufficient_scope arrives with active: true — token valid, scope not
@@ -59,6 +65,7 @@ class IntrospectionClient
         $maxRetries = (int) ($this->config['max_retries'] ?? 3);
         $verifyUrl  = $this->config['verify_url'] ?? 'https://api.agentadmit.com/api/v1/verify';
         $delayMs    = 1000; // initial backoff: 1 second (in ms)
+        $waitedMs   = 0;    // cumulative wait across retries
 
         for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
             try {
@@ -92,17 +99,31 @@ class IntrospectionClient
                     );
                 }
 
-                // Compute wait: honor Retry-After or use exponential backoff (cap 30s)
-                $waitMs  = $retryAfter !== null ? (int)($retryAfter * 1000) : min($delayMs, 30000);
+                // Compute wait: Retry-After beats exponential backoff, but both
+                // are capped — Retry-After is untrusted server input and must
+                // not pin the caller.
+                $requestedMs = $retryAfter !== null ? (int)($retryAfter * 1000) : $delayMs;
+                $waitMs  = min(max(0, $requestedMs), self::MAX_RETRY_WAIT_MS);
                 $jitterMs = random_int(0, 500);
                 $totalMs  = $waitMs + $jitterMs;
+
+                if ($waitedMs + $totalMs > self::MAX_RETRY_BUDGET_MS) {
+                    throw new RateLimitException(
+                        'AgentAdmit rate limit retry budget (' . (self::MAX_RETRY_BUDGET_MS / 1000) . 's) exhausted.',
+                        $retryAfter,
+                        $rlLimit,
+                        $rlRemaining,
+                        $rlReset
+                    );
+                }
+                $waitedMs += $totalMs;
 
                 Log::warning(
                     "AgentAdmit introspection rate-limited (attempt " . ($attempt + 1) . "/{$maxRetries}). " .
                     "Retrying in {$totalMs}ms."
                 );
 
-                usleep($totalMs * 1000); // usleep takes microseconds
+                $this->waitBeforeRetry($totalMs);
                 $delayMs = min($delayMs * 2, 30000);
                 continue;
             }
@@ -176,6 +197,12 @@ class IntrospectionClient
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
+
+    /** Sleep before the next retry. Protected so tests can record instead of sleeping. */
+    protected function waitBeforeRetry(int $totalMs): void
+    {
+        usleep($totalMs * 1000); // usleep takes microseconds
+    }
 
     /** Parse a float response header, returning null if absent or non-numeric. */
     private function parseFloatHeader(\Illuminate\Http\Client\Response $response, string $name): ?float
