@@ -182,6 +182,8 @@ class IntrospectionClient
                     appId: $data['app_id'] ?? null,
                     jti: $data['jti'] ?? null,
                     exp: isset($data['exp']) ? (int) $data['exp'] : null,
+                    consent: (isset($data['consent']) && is_array($data['consent'])
+                        && is_bool($data['consent']['granted'] ?? null)) ? $data['consent'] : null,
                 );
             } catch (AgentAdmitException $e) {
                 throw $e;
