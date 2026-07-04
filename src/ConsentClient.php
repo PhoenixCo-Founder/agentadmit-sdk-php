@@ -71,7 +71,16 @@ class ConsentClient
                 ->post($this->apiUrl('/api/v1/consent/check'), $body);
 
             $this->checkStatus($response, 'checkConsent');
-            return $response->json();
+
+            // Fail closed on malformed bodies: a 200 whose body is not valid
+            // JSON, or whose 'granted' is not a strict boolean, is an error
+            // rather than an implicit allow.
+            $data = $response->json();
+            if (!is_array($data) || !is_bool($data['granted'] ?? null)) {
+                throw new AgentAdmitException('checkConsent returned a malformed response body', 502);
+            }
+
+            return $data;
         } catch (AgentAdmitException $e) {
             throw $e;
         } catch (\Throwable $e) {

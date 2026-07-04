@@ -1,6 +1,6 @@
 {
   "name": "agentadmit/agentadmit-sdk",
-  "description": "AgentAdmit SDK for PHP — User-mediated AI agent authorization for Laravel",
+  "description": "AgentAdmit SDK for PHP - User-mediated AI agent authorization for Laravel",
   "type": "library",
   "license": "proprietary",
   "authors": [

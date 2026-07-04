@@ -26,9 +26,19 @@ class IntrospectionResult
      * Consent Ledger verdict for the external-agent path (additive; may be
      * null). A denied verdict means the app returns its own 403 -- the token
      * itself stays valid (consent is orthogonal to revocation).
+     *
+     * Semantics are fail-closed for malformed data: an absent consent block
+     * (null) means a legacy server that predates the Consent Ledger, so
+     * access is allowed. When a consent block is present, only a strict
+     * boolean true in 'granted' allows access; a missing or non-boolean
+     * 'granted' is treated as denied.
      */
     public function consentGranted(): bool
     {
-        return $this->consent === null || ($this->consent['granted'] ?? true) !== false;
+        if ($this->consent === null) {
+            return true; // Legacy server: no consent block at all.
+        }
+
+        return ($this->consent['granted'] ?? null) === true;
     }
 }

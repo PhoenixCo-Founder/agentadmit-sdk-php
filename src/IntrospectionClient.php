@@ -182,8 +182,14 @@ class IntrospectionClient
                     appId: $data['app_id'] ?? null,
                     jti: $data['jti'] ?? null,
                     exp: isset($data['exp']) ? (int) $data['exp'] : null,
-                    consent: (isset($data['consent']) && is_array($data['consent'])
-                        && is_bool($data['consent']['granted'] ?? null)) ? $data['consent'] : null,
+                    // Absent (or explicit null) consent means a legacy server
+                    // and stays null (allowed). A present consent block is
+                    // passed through so consentGranted() can fail closed on a
+                    // missing or non-boolean 'granted'; a present non-array
+                    // block is normalized to [] which is also denied.
+                    consent: isset($data['consent'])
+                        ? (is_array($data['consent']) ? $data['consent'] : [])
+                        : null,
                 );
             } catch (AgentAdmitException $e) {
                 throw $e;
