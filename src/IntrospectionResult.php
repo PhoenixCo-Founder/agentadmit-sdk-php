@@ -15,6 +15,7 @@ class IntrospectionResult
         public readonly ?string $jti = null,
         public readonly ?int $exp = null,
         public readonly ?array $consent = null,
+        public readonly ?array $presence = null,
     ) {}
 
     public function hasScope(string $scope): bool
@@ -40,5 +41,21 @@ class IntrospectionResult
         }
 
         return ($this->consent['granted'] ?? null) === true;
+    }
+
+    /**
+     * Human-presence fact from the WebAuthn step-up (additive; may be null):
+     * whether the human who authorized this connection completed a presence
+     * ceremony on the consent page. Absent on older servers, and
+     * 'verified' => false for connections minted without a ceremony
+     * (direct-API tokens, presence-off sessions, pre-presence connections).
+     *
+     * Semantics are strict and fail closed: only a strict boolean true in
+     * 'verified' counts. An absent block (null, i.e. an older server or a
+     * malformed block dropped by the client) is NOT verified.
+     */
+    public function presenceVerified(): bool
+    {
+        return ($this->presence['verified'] ?? null) === true;
     }
 }

@@ -43,5 +43,6 @@ class AgentAdmitServiceProvider extends ServiceProvider
         $router = $this->app['router'];
         $router->aliasMiddleware('agentadmit.scope', Middleware\RequireScope::class);
         $router->aliasMiddleware('agentadmit.scope_if_agent', Middleware\RequireScopeIfAgent::class);
+        $router->aliasMiddleware('agentadmit.presence', Middleware\RequirePresence::class);
     }
 }

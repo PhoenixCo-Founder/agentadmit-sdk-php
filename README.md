@@ -80,6 +80,26 @@ if (!$verdict['granted']) {
 
 Consent is orthogonal to revocation: a denied verdict means your app returns its own 403; the connection and token stay valid so the user can flip consent back on without re-connecting. Write switches through `PUT /api/v1/consent/settings` from your backend; export the audit trail with `GET /api/v1/consent/export` (every plan).
 
+## Presence Verification (WebAuthn Step-Up)
+
+AgentAdmit can require the human behind a connection to complete a WebAuthn presence ceremony on the consent page. The verify result carries the outcome as an additive `presence` block, and the SDK surfaces it next to the consent verdict:
+
+```php
+$result = $introspectionClient->verify($token);
+if (!$result->presenceVerified()) {
+    abort(403, 'This action requires a connection authorized with human presence verification.');
+}
+```
+
+Or enforce it per route with the fail-closed middleware:
+
+```php
+// routes/api.php
+Route::middleware('agentadmit.presence')->post('/orders', [OrderController::class, 'store']);
+```
+
+`presenceVerified()` is strict: it returns `true` only when the platform reports `verified: true`. Connections minted without a ceremony, malformed blocks, and older servers that omit the block entirely all count as not verified, so guarded routes return a 403 with `error: presence_required`. Unlike consent, absence does not mean allowed: presence fails closed because a missing block means no ceremony was ever proven.
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The PHP SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  -  no changes needed in your middleware code.

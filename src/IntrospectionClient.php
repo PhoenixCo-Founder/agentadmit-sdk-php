@@ -190,6 +190,17 @@ class IntrospectionClient
                     consent: isset($data['consent'])
                         ? (is_array($data['consent']) ? $data['consent'] : [])
                         : null,
+                    // Human-presence fact rides along when the platform
+                    // returns it (additive; absent on older servers). Same
+                    // strictness as 'active': the block must be an array and
+                    // 'verified' must be strictly boolean, never coerced.
+                    // Anything else is treated as absent, so
+                    // presenceVerified() fails closed.
+                    presence: isset($data['presence'])
+                        && is_array($data['presence'])
+                        && is_bool($data['presence']['verified'] ?? null)
+                        ? $data['presence']
+                        : null,
                 );
             } catch (AgentAdmitException $e) {
                 throw $e;
