@@ -31,6 +31,10 @@ class AgentAdmitServiceProvider extends ServiceProvider
         $this->app->singleton(TokensClient::class, function ($app) {
             return new TokensClient(config('agentadmit'));
         });
+
+        $this->app->singleton(ConsentClient::class, function ($app) {
+            return new ConsentClient(config('agentadmit'));
+        });
     }
 
     public function boot(): void
@@ -44,5 +48,6 @@ class AgentAdmitServiceProvider extends ServiceProvider
         $router->aliasMiddleware('agentadmit.scope', Middleware\RequireScope::class);
         $router->aliasMiddleware('agentadmit.scope_if_agent', Middleware\RequireScopeIfAgent::class);
         $router->aliasMiddleware('agentadmit.presence', Middleware\RequirePresence::class);
+        $router->aliasMiddleware('agentadmit.caller_consent', Middleware\CallerConsent::class);
     }
 }

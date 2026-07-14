@@ -80,6 +80,25 @@ if (!$verdict['granted']) {
 
 Consent is orthogonal to revocation: a denied verdict means your app returns its own 403; the connection and token stay valid so the user can flip consent back on without re-connecting. Write switches through `PUT /api/v1/consent/settings` from your backend; export the audit trail with `GET /api/v1/consent/export` (every plan).
 
+**One-middleware drop-in.** Instead of wiring the three paths by hand, the `agentadmit.caller_consent` middleware classifies the caller from the credential and evaluates the right independent path:
+
+```php
+// config/agentadmit.php
+'caller_consent' => [
+    // derive the class from your own credential structure, never caller input
+    'classify_non_agent' => fn ($request) => $request->headers->get('x-internal-ai') === env('INTERNAL_AI_SECRET')
+        ? 'in_app_ai' : 'human_session',
+    'resolve_data_owner_id' => fn ($request) => $request->route('owner_id'),
+],
+
+// routes: the middleware parameter is the required scope for external agents
+Route::middleware('agentadmit.caller_consent:read:records')
+    ->get('/api/records/{owner_id}', ...);
+// Downstream: $request->attributes->get('agentadmit.caller_class' / 'agentadmit.consent')
+```
+
+External agents are checked via hosted introspection (consent verdict plus scope); in-app AI via the Consent Ledger (fail closed); the human path defers to your own permission model unless `caller_consent.gate_human` is true. It is a consent gate, not an authenticator, so register it after your own authentication.
+
 ## Presence Verification (WebAuthn Step-Up)
 
 AgentAdmit can require the human behind a connection to complete a WebAuthn presence ceremony on the consent page. The verify result carries the outcome as an additive `presence` block, and the SDK surfaces it next to the consent verdict:
