@@ -28,16 +28,23 @@ class IntrospectionResult
      * null). A denied verdict means the app returns its own 403 -- the token
      * itself stays valid (consent is orthogonal to revocation).
      *
-     * Semantics are fail-closed for malformed data: an absent consent block
-     * (null) means a legacy server that predates the Consent Ledger, so
-     * access is allowed. When a consent block is present, only a strict
-     * boolean true in 'granted' allows access; a missing or non-boolean
-     * 'granted' is treated as denied.
+     * SECURITY: an absent consent block (null $consent) is NOT proof of a
+     * grant. The hosted service deliberately omits the block when its
+     * consent-store read fails (designed degraded mode). This helper cannot
+     * consult the ledger, so it reports true for an absent block; callers
+     * enforcing consent by hand MUST resolve a null $consent through
+     * ConsentClient::checkConsent() before granting access - the CallerConsent
+     * middleware does exactly that (fail closed: 503 when the ledger is
+     * unavailable). When a consent block is present, only a strict boolean
+     * true in 'granted' reports granted; a missing or non-boolean 'granted'
+     * reports denied.
      */
     public function consentGranted(): bool
     {
         if ($this->consent === null) {
-            return true; // Legacy server: no consent block at all.
+            // Absent block: unresolved, not a grant. Resolve via the Consent
+            // Ledger (see CallerConsent middleware) before granting access.
+            return true;
         }
 
         return ($this->consent['granted'] ?? null) === true;

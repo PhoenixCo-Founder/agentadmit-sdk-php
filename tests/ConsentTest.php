@@ -19,7 +19,10 @@ use PHPUnit\Framework\TestCase;
  *  - throws on a 200 with a malformed (non-JSON or non-boolean granted) body
  *
  * IntrospectionResult::consentGranted():
- *  - absent consent block (null) => true (legacy server, documented behavior)
+ *  - absent consent block (null) => true, but absence is UNRESOLVED, not a
+ *    grant: the hosted service omits the block when its consent-store read
+ *    fails, and the CallerConsent middleware resolves a null block through
+ *    the Consent Ledger instead of calling this helper
  *  - granted === true            => true
  *  - granted === false           => false
  *  - granted missing/non-boolean => false (malformed = deny)
@@ -129,7 +132,10 @@ class ConsentTest extends TestCase
 
     public function testConsentGrantedTrueWhenConsentBlockAbsent(): void
     {
-        // Legacy server: no consent block at all => allowed.
+        // Absent block: the helper alone cannot consult the ledger, so it
+        // reports true — but absence is NOT a grant. Enforcement paths must
+        // resolve a null block via ConsentClient::checkConsent(); the
+        // CallerConsent middleware pins that in CallerConsentMiddlewareTest.
         $this->assertTrue($this->introspectionResult(null)->consentGranted());
     }
 
