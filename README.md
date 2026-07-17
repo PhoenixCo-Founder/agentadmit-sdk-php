@@ -66,6 +66,8 @@ if (!$result->consentGranted()) {
 }
 ```
 
+`consentGranted()` fails closed when the verdict is absent (the hosted service omits it while its consent store is unreadable). To keep serving during that degraded mode, resolve an absent verdict authoritatively with `ConsentClient::checkConsent($result->userId, 'external_agent')` — the `CallerConsent` middleware does this for you.
+
 **Human sessions and in-app AI** never hold AgentAdmit tokens, so ask directly:
 
 ```php

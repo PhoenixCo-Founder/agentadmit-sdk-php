@@ -182,11 +182,15 @@ class IntrospectionClient
                     appId: $data['app_id'] ?? null,
                     jti: $data['jti'] ?? null,
                     exp: isset($data['exp']) ? (int) $data['exp'] : null,
-                    // Absent (or explicit null) consent means a legacy server
-                    // and stays null (allowed). A present consent block is
-                    // passed through so consentGranted() can fail closed on a
-                    // missing or non-boolean 'granted'; a present non-array
-                    // block is normalized to [] which is also denied.
+                    // Absent (or explicit null) consent stays null - the
+                    // hosted service omits the block when its consent-store
+                    // read fails (designed degraded mode), so null means
+                    // UNRESOLVED, never granted; the CallerConsent middleware
+                    // resolves it through the Consent Ledger. A present
+                    // consent block is passed through so consentGranted() can
+                    // fail closed on a missing or non-boolean 'granted'; a
+                    // present non-array block is normalized to [] which is
+                    // also denied.
                     consent: isset($data['consent'])
                         ? (is_array($data['consent']) ? $data['consent'] : [])
                         : null,

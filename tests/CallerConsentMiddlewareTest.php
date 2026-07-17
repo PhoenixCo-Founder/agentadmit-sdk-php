@@ -15,6 +15,10 @@
  *    check, and cannot be self-selected;
  *  - each class routes to its OWN isolated path (the human path never calls
  *    the ledger by default);
+ *  - on the external-agent path, consent is evaluated BEFORE scope (a denied
+ *    class never sees granted_scopes), and an absent or malformed inline
+ *    verdict is resolved through the Consent Ledger - never treated as a
+ *    grant;
  *  - fail closed on a denied verdict or an unreachable ledger.
  */
 
@@ -152,9 +156,26 @@ namespace AgentAdmit\Tests {
         // external_agent path
         // -------------------------------------------------------------------
 
+        private function grantedConsentBlock(): array
+        {
+            return ['caller_class' => 'external_agent', 'granted' => true, 'source' => 'setting'];
+        }
+
+        private function ledgerVerdict(bool $granted): array
+        {
+            return [
+                'caller_class' => 'external_agent',
+                'granted'      => $granted,
+                'source'       => 'setting',
+                'evaluated_at' => 'x',
+            ];
+        }
+
         public function testExternalAgentAllowsWithRequiredScope(): void
         {
-            Http::fake(['*' => Http::response($this->validPayload())]);
+            Http::fake(['*' => Http::response($this->validPayload([
+                'consent' => $this->grantedConsentBlock(),
+            ]))]);
 
             $request = $this->agentRequest();
             $response = $this->handle($request, $nextCalled, 'read:records');
@@ -162,11 +183,15 @@ namespace AgentAdmit\Tests {
             $this->assertTrue($nextCalled);
             $this->assertSame('external_agent', $request->attributes->get('agentadmit.caller_class'));
             $this->assertSame('agent', $request->attributes->get('agentadmit.auth_type'));
+            // A well-formed inline verdict needs no ledger call.
+            Http::assertSentCount(1);
         }
 
         public function testExternalAgentDeniedOnMissingScope(): void
         {
-            Http::fake(['*' => Http::response($this->validPayload())]);
+            Http::fake(['*' => Http::response($this->validPayload([
+                'consent' => $this->grantedConsentBlock(),
+            ]))]);
 
             $response = $this->handle($this->agentRequest(), $nextCalled, 'write:records');
 
@@ -188,13 +213,105 @@ namespace AgentAdmit\Tests {
             $this->assertSame('consent_not_granted', $this->body($response)['error']);
         }
 
-        public function testExternalAgentAllowsWhenNoConsentBlock(): void
+        public function testExternalAgentDeniedConsentWinsOverMissingScope(): void
         {
-            Http::fake(['*' => Http::response($this->validPayload())]);
+            // Patent FIG. 3 stage order: consent precedes scope. A caller
+            // whose class the owner denied gets ONLY consent_not_granted and
+            // never learns scope state, even when the scope check would also
+            // fail. The ledger fake 500s so any (wrong) fallback would surface
+            // as a 503 instead of the expected 403.
+            Http::fake([
+                '*/api/v1/verify'        => Http::response($this->validPayload([
+                    'consent' => ['caller_class' => 'external_agent', 'granted' => false, 'source' => 'setting'],
+                ])),
+                '*/api/v1/consent/check' => Http::response(['error' => 'server_error'], 500),
+            ]);
+
+            $response = $this->handle($this->agentRequest(), $nextCalled, 'write:records');
+
+            $this->assertFalse($nextCalled);
+            $this->assertSame(403, $response->getStatusCode());
+            $body = $this->body($response);
+            $this->assertSame('consent_not_granted', $body['error']);
+            $this->assertArrayNotHasKey('granted_scopes', $body);
+            $this->assertArrayNotHasKey('required_scope', $body);
+            Http::assertSentCount(1); // introspection only; explicit deny needs no ledger
+        }
+
+        public function testExternalAgentAbsentVerdictResolvedViaLedgerAllow(): void
+        {
+            // The hosted service omits the consent block when its
+            // consent-store read fails (designed degraded mode). Absence is
+            // never a grant: the verdict is resolved through the Consent
+            // Ledger for the external_agent class, with the configured scope
+            // group and the owner from the introspection result.
+            $GLOBALS['__agentadmit_test_config']['agentadmit.caller_consent.scope_group'] = 'records';
+            Http::fake([
+                '*/api/v1/verify'        => Http::response($this->validPayload()),
+                '*/api/v1/consent/check' => Http::response($this->ledgerVerdict(true)),
+            ]);
+
+            $request = $this->agentRequest();
+            $this->handle($request, $nextCalled);
+
+            $this->assertTrue($nextCalled);
+            Http::assertSent(function ($req) {
+                return str_contains($req->url(), '/api/v1/consent/check')
+                    && $req['caller_class'] === 'external_agent'
+                    && $req['app_user_id'] === 'user_42'
+                    && $req['scope_group'] === 'records';
+            });
+            // The resolved ledger verdict lands on the request attributes.
+            $this->assertSame($this->ledgerVerdict(true), $request->attributes->get('agentadmit.consent'));
+        }
+
+        public function testExternalAgentAbsentVerdictLedgerDenyIs403(): void
+        {
+            Http::fake([
+                '*/api/v1/verify'        => Http::response($this->validPayload()),
+                '*/api/v1/consent/check' => Http::response($this->ledgerVerdict(false)),
+            ]);
+
+            $response = $this->handle($this->agentRequest(), $nextCalled);
+
+            $this->assertFalse($nextCalled);
+            $this->assertSame(403, $response->getStatusCode());
+            $this->assertSame('consent_not_granted', $this->body($response)['error']);
+        }
+
+        public function testExternalAgentAbsentVerdictLedgerErrorFailsClosed(): void
+        {
+            Http::fake([
+                '*/api/v1/verify'        => Http::response($this->validPayload()),
+                '*/api/v1/consent/check' => Http::response(['error' => 'server_error'], 500),
+            ]);
+
+            $response = $this->handle($this->agentRequest(), $nextCalled);
+
+            $this->assertFalse($nextCalled);
+            $this->assertSame(503, $response->getStatusCode());
+            $this->assertSame('consent_unavailable', $this->body($response)['error']);
+        }
+
+        public function testExternalAgentMalformedVerdictResolvedViaLedger(): void
+        {
+            // A present block whose 'granted' is not a strict boolean is as
+            // unresolved as an absent one: resolve via the ledger, not deny
+            // outright and not allow.
+            Http::fake([
+                '*/api/v1/verify'        => Http::response($this->validPayload([
+                    'consent' => ['caller_class' => 'external_agent', 'granted' => 'true', 'source' => 'setting'],
+                ])),
+                '*/api/v1/consent/check' => Http::response($this->ledgerVerdict(true)),
+            ]);
 
             $this->handle($this->agentRequest(), $nextCalled);
 
             $this->assertTrue($nextCalled);
+            Http::assertSent(function ($req) {
+                return str_contains($req->url(), '/api/v1/consent/check')
+                    && $req['caller_class'] === 'external_agent';
+            });
         }
 
         public function testExternalAgentRejectedOnInvalidToken(): void

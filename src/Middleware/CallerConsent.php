@@ -27,7 +27,10 @@ use Symfony\Component\HttpFoundation\Response;
  *
  *  - external_agent: an ag_at_ access token -> hosted introspection, which
  *    returns the external-agent consent verdict inline plus the granted
- *    scopes. Enforced here directly.
+ *    scopes. Consent is evaluated BEFORE scope (a denied class must not learn
+ *    scope state or step-up guidance). A missing or malformed verdict is
+ *    resolved through the Consent Ledger, fail closed - absence is never a
+ *    grant.
  *  - in_app_ai: your application's own server-side AI code path -> the
  *    Consent Ledger /consent/check for the in-app-AI class.
  *  - human_session: your application's own permission model (sharing, roles,
@@ -134,8 +137,12 @@ class CallerConsent
 
     /**
      * External-agent path: hosted introspection carries the verdict and the
-     * scopes. A present-and-denied verdict fails closed; an absent verdict
-     * means the platform default (external-agent allowed) held.
+     * scopes. Consent is evaluated BEFORE scope (Patent FIG. 3: the class
+     * consent decision precedes scope evaluation), so a caller whose class the
+     * owner has denied never learns scope state. An absent or malformed
+     * verdict is resolved through the Consent Ledger, fail closed - the hosted
+     * service omits the block when its consent-store read fails (designed
+     * degraded mode), so absence is never a grant.
      */
     private function handleExternalAgent(Request $request, Closure $next, ?string $scope): Response
     {
@@ -153,6 +160,48 @@ class CallerConsent
             ], $e->getStatusCode());
         }
 
+        // Consent first (Patent FIG. 3: the class consent decision precedes
+        // scope evaluation). Checking scope first leaked granted-scope state
+        // to callers whose class the owner had denied.
+        $verdict = $result->consent;
+        if (!is_array($verdict) || !is_bool($verdict['granted'] ?? null)) {
+            // Absent or malformed verdict: the hosted service omits the block
+            // when its consent-store read fails (designed degraded mode).
+            // Resolve through the Consent Ledger; never treat absence as a
+            // grant. Fail closed when the owner is unresolvable or the ledger
+            // errors.
+            $owner = $result->userId;
+            if ($owner === '') {
+                return response()->json([
+                    'error' => 'consent_unavailable',
+                    'error_description' => 'Introspection carried no consent verdict and no resolvable data owner.',
+                ], 503);
+            }
+
+            try {
+                $verdict = $this->consent->checkConsent(
+                    $owner,
+                    ConsentClient::CALLER_CLASS_EXTERNAL_AGENT,
+                    config('agentadmit.caller_consent.scope_group')
+                );
+            } catch (\Throwable $e) {
+                Log::warning('AgentAdmit CallerConsent ledger unavailable: ' . $e->getMessage());
+
+                return response()->json([
+                    'error' => 'consent_unavailable',
+                    'error_description' => 'Consent check failed',
+                ], 503);
+            }
+        }
+
+        if (($verdict['granted'] ?? null) !== true) {
+            return response()->json([
+                'error' => 'consent_not_granted',
+                'caller_class' => ConsentClient::CALLER_CLASS_EXTERNAL_AGENT,
+                'message' => 'The data owner has not enabled external agent access.',
+            ], 403);
+        }
+
         if ($scope !== null && !$result->hasScope($scope)) {
             return response()->json([
                 'error' => 'insufficient_scope',
@@ -162,22 +211,12 @@ class CallerConsent
             ], 403);
         }
 
-        if (!$result->consentGranted()) {
-            return response()->json([
-                'error' => 'consent_not_granted',
-                'caller_class' => ConsentClient::CALLER_CLASS_EXTERNAL_AGENT,
-                'message' => 'The data owner has not enabled external agent access.',
-            ], 403);
-        }
-
         $request->attributes->set('agentadmit.auth_type', 'agent');
         $request->attributes->set('agentadmit.user_id', $result->userId);
         $request->attributes->set('agentadmit.scopes', $result->scopes);
         $request->attributes->set('agentadmit.connection_id', $result->connectionId);
         $request->attributes->set('agentadmit.agent_label', $result->agentLabel);
-        if ($result->consent !== null) {
-            $request->attributes->set('agentadmit.consent', $result->consent);
-        }
+        $request->attributes->set('agentadmit.consent', $verdict);
 
         return $next($request);
     }

@@ -1,0 +1,97 @@
+# CI for agentadmit/agentadmit-sdk (PHP / Laravel)
+#
+# Two gates on every push and pull request:
+#   1. test — composer validate, lint, full dev install, phpunit
+#   2. clean-autoload smoke — composer install --no-dev into a pristine copy,
+#      then require vendor/autoload.php and class_exists() every AgentAdmit
+#      class under src/. This is the PHP analogue of the clean-install smoke
+#      used by the other SDKs: it catches classes that only load because a
+#      dev-only or undeclared (transitive) dependency happens to be present.
+#
+# Action versions are pinned to exact SHAs per supply chain policy.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
+        with:
+          php-version: '8.2'
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Lint
+        run: |
+          for f in $(find src config tests -name '*.php'); do php -l "$f" > /dev/null; done
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Run tests
+        run: vendor/bin/phpunit --no-coverage
+
+  clean-autoload-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
+        with:
+          php-version: '8.2'
+
+      - name: Runtime-only install into a pristine copy
+        run: |
+          mkdir -p /tmp/clean-install
+          cp -R . /tmp/clean-install/pkg
+          cd /tmp/clean-install/pkg
+          rm -rf vendor
+          composer install --no-dev --no-interaction --prefer-dist
+
+      - name: Autoload every AgentAdmit class from the runtime-only vendor tree
+        run: |
+          cat > /tmp/autoload-smoke.php <<'PHP'
+          <?php
+          require 'vendor/autoload.php';
+
+          $base = realpath('src');
+          $checked = 0;
+          $failures = [];
+          $iterator = new RecursiveIteratorIterator(
+              new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS)
+          );
+          foreach ($iterator as $file) {
+              if (!$file->isFile() || $file->getExtension() !== 'php') {
+                  continue;
+              }
+              $relative = substr($file->getRealPath(), strlen($base) + 1, -strlen('.php'));
+              $class = 'AgentAdmit\\' . str_replace(DIRECTORY_SEPARATOR, '\\', $relative);
+              $checked++;
+              if (!class_exists($class) && !interface_exists($class) && !trait_exists($class)) {
+                  $failures[] = $class;
+              }
+          }
+          if ($checked === 0) {
+              fwrite(STDERR, "clean-autoload smoke found no classes under src/\n");
+              exit(1);
+          }
+          if ($failures !== []) {
+              fwrite(STDERR, "Classes failed to autoload from a --no-dev install:\n  " . implode("\n  ", $failures) . "\n");
+              exit(1);
+          }
+          echo "clean-autoload smoke OK: {$checked} classes loaded from a runtime-only install\n";
+          PHP
+          cd /tmp/clean-install/pkg
+          php /tmp/autoload-smoke.php
