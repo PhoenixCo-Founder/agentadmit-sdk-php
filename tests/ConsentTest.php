@@ -19,10 +19,10 @@ use PHPUnit\Framework\TestCase;
  *  - throws on a 200 with a malformed (non-JSON or non-boolean granted) body
  *
  * IntrospectionResult::consentGranted():
- *  - absent consent block (null) => true, but absence is UNRESOLVED, not a
- *    grant: the hosted service omits the block when its consent-store read
- *    fails, and the CallerConsent middleware resolves a null block through
- *    the Consent Ledger instead of calling this helper
+ *  - absent consent block (null) => false (fail closed): the hosted service
+ *    omits the block when its consent-store read fails, so absence is never a
+ *    grant; the CallerConsent middleware resolves a null block through the
+ *    Consent Ledger for an authoritative verdict
  *  - granted === true            => true
  *  - granted === false           => false
  *  - granted missing/non-boolean => false (malformed = deny)
@@ -130,13 +130,14 @@ class ConsentTest extends TestCase
     // IntrospectionResult::consentGranted() matrix
     // -------------------------------------------------------------------------
 
-    public function testConsentGrantedTrueWhenConsentBlockAbsent(): void
+    public function testConsentGrantedFalseWhenConsentBlockAbsent(): void
     {
-        // Absent block: the helper alone cannot consult the ledger, so it
-        // reports true — but absence is NOT a grant. Enforcement paths must
-        // resolve a null block via ConsentClient::checkConsent(); the
-        // CallerConsent middleware pins that in CallerConsentMiddlewareTest.
-        $this->assertTrue($this->introspectionResult(null)->consentGranted());
+        // Absent block: unresolved, never a grant — the helper fails closed.
+        // Enforcement paths that want an authoritative answer resolve a null
+        // block via ConsentClient::checkConsent(); the CallerConsent
+        // middleware pins that in CallerConsentMiddlewareTest. (Through 1.5.0
+        // this returned true — the fail-open class 1.5.1 removes.)
+        $this->assertFalse($this->introspectionResult(null)->consentGranted());
     }
 
     public function testConsentGrantedTrueWhenGrantedIsBooleanTrue(): void
