@@ -18,6 +18,9 @@ class TokensClient
      */
     public const DURATION_DEFAULT = 'aa_duration_default';
 
+    /** Maximum length (characters) of a declared purpose. */
+    public const PURPOSE_MAX_LENGTH = 300;
+
     private array $config;
 
     public function __construct(array $config)
@@ -39,19 +42,34 @@ class TokensClient
      *  - null — explicit JSON null; the connection lasts until revoked
      *  - int — explicit duration in seconds (60–31536000)
      *
+     * The declared purpose is the user-facing reason recorded on the grant at
+     * the consent moment (shown to the human on the consent page). It is a
+     * review-time record only, never an enforcement input; authorization
+     * decisions ride scopes, connection status, and consent.
+     *
      * @param string      $userId          Your app's identifier for the user
      * @param array       $scopes          Scopes the connection grants
      * @param string|null $role            The user's role on the connection
      * @param int|string|null $durationSeconds See above
+     * @param string|null $purpose         Declared purpose (max 300 characters);
+     *                                     omitted from the request when null
      * @return array The issue response — ['token' => 'ag_ct_…', 'expires_in' => …, …]
+     * @throws \InvalidArgumentException When $purpose exceeds 300 characters
      * @throws AgentAdmitException
      */
     public function issueToken(
         string $userId,
         array $scopes,
         ?string $role = null,
-        int|string|null $durationSeconds = self::DURATION_DEFAULT
+        int|string|null $durationSeconds = self::DURATION_DEFAULT,
+        ?string $purpose = null
     ): array {
+        if ($purpose !== null && mb_strlen($purpose) > self::PURPOSE_MAX_LENGTH) {
+            throw new \InvalidArgumentException(
+                'purpose must be ' . self::PURPOSE_MAX_LENGTH . ' characters or fewer'
+            );
+        }
+
         $appId = $this->config['app_id'] ?? '';
         $url = rtrim($this->config['api_url'] ?? 'https://api.agentadmit.com', '/')
             . "/api/v1/apps/{$appId}/token";
@@ -67,6 +85,9 @@ class TokensClient
         // json_encode as explicit JSON null (no array_filter anywhere).
         if ($durationSeconds !== self::DURATION_DEFAULT) {
             $body['duration_seconds'] = $durationSeconds;
+        }
+        if ($purpose !== null) {
+            $body['purpose'] = $purpose;
         }
 
         return $this->post($url, $body, 'issueToken', authenticated: true);

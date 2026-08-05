@@ -205,6 +205,13 @@ class IntrospectionClient
                         && is_bool($data['presence']['verified'] ?? null)
                         ? $data['presence']
                         : null,
+                    // Declared purpose rides along when the platform returns
+                    // it (additive; nullable). Review-time record only, never
+                    // an enforcement input, so a malformed (non-string) value
+                    // is treated as absent rather than failing the verify.
+                    purpose: isset($data['purpose']) && is_string($data['purpose'])
+                        ? $data['purpose']
+                        : null,
                 );
             } catch (AgentAdmitException $e) {
                 throw $e;
