@@ -121,6 +121,31 @@ Route::middleware('agentadmit.presence')->post('/orders', [OrderController::clas
 
 `presenceVerified()` is strict: it returns `true` only when the platform reports `verified: true`. Connections minted without a ceremony, malformed blocks, and older servers that omit the block entirely all count as not verified, so guarded routes return a 403 with `error: presence_required`. Unlike consent, absence does not mean allowed: presence fails closed because a missing block means no ceremony was ever proven.
 
+## Declared Purpose
+
+Declared purpose: the user-facing reason recorded on the grant at the consent moment. Review-time record only, never an enforcement input; authorization decisions ride scopes, connection status, and consent.
+
+Pass an optional `purpose` (max 300 characters) when issuing a connection token. AgentAdmit shows it to the human on the consent page ("Declared purpose: …"), records it on the grant, stamps it into every audit log row, and returns it from `/verify` introspection:
+
+```php
+$issued = $tokens->issueToken(
+    'user_42',
+    ['read:orders'],
+    purpose: 'Reorder the usual weekly groceries',
+);
+```
+
+The SDK rejects purposes longer than 300 characters client-side with an `InvalidArgumentException`; when you pass no purpose, the field is omitted from the request entirely.
+
+On the verify side, the result carries the nullable purpose for display and review:
+
+```php
+$result = $introspectionClient->verify($token);
+$result->purpose; // 'Reorder the usual weekly groceries', or null when none was declared
+```
+
+`purpose` is `null` for connections minted without one and on older servers that omit the field. Do not branch authorization on it  -  `/verify` never gates on the purpose, and neither should your app.
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The PHP SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  -  no changes needed in your middleware code.
@@ -273,7 +298,15 @@ $tokens = app(TokensClient::class);
 //   omit the argument                     → AgentAdmit default (30 days)
 //   null                                  → until the user revokes
 //   int seconds (60–31536000)             → explicit duration
-$issued = $tokens->issueToken('user_42', ['read:orders'], role: 'user', durationSeconds: null);
+// The optional purpose (max 300 chars) is shown to the human at the consent
+// moment and recorded on the grant — see "Declared Purpose" above.
+$issued = $tokens->issueToken(
+    'user_42',
+    ['read:orders'],
+    role: 'user',
+    durationSeconds: null,
+    purpose: 'Reorder the usual weekly groceries',
+);
 $connectionToken = $issued['token']; // ag_ct_…
 
 // Agent side  -  no API key needed; the connection token is the credential.

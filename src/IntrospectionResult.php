@@ -16,6 +16,14 @@ class IntrospectionResult
         public readonly ?int $exp = null,
         public readonly ?array $consent = null,
         public readonly ?array $presence = null,
+        /**
+         * Declared purpose: the user-facing reason recorded on the grant at
+         * the consent moment. Review-time record only, never an enforcement
+         * input; authorization decisions ride scopes, connection status, and
+         * consent. Null when the connection was minted without one (or on
+         * older servers that omit the field).
+         */
+        public readonly ?string $purpose = null,
     ) {}
 
     public function hasScope(string $scope): bool
