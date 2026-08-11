@@ -21,6 +21,9 @@ class TokensClient
     /** Maximum length (characters) of a declared purpose. */
     public const PURPOSE_MAX_LENGTH = 300;
 
+    /** Maximum length (characters) of a user-declared intent. */
+    public const USER_INTENT_MAX_LENGTH = 300;
+
     private array $config;
 
     public function __construct(array $config)
@@ -47,14 +50,28 @@ class TokensClient
      * review-time record only, never an enforcement input; authorization
      * decisions ride scopes, connection status, and consent.
      *
+     * The user-declared intent is the USER's own words, typed by the human at
+     * the consent moment (distinct from the declared purpose, which is the
+     * app's words). Same semantics: a review-time record only, never an
+     * enforcement input. Outbound validation mirrors purpose: a non-string,
+     * non-null value or a value longer than 300 characters throws
+     * InvalidArgumentException before any request is sent (silently dropping
+     * the user's typed words would be data loss). null and the empty string
+     * are omitted from the request.
+     *
      * @param string      $userId          Your app's identifier for the user
      * @param array       $scopes          Scopes the connection grants
      * @param string|null $role            The user's role on the connection
      * @param int|string|null $durationSeconds See above
      * @param string|null $purpose         Declared purpose (max 300 characters);
      *                                     omitted from the request when null
+     * @param mixed       $userIntent      User-declared intent (string, max 300
+     *                                     characters); omitted from the request
+     *                                     when null or empty
      * @return array The issue response — ['token' => 'ag_ct_…', 'expires_in' => …, …]
-     * @throws \InvalidArgumentException When $purpose exceeds 300 characters
+     * @throws \InvalidArgumentException When $purpose exceeds 300 characters, or
+     *                                   when $userIntent is a non-string,
+     *                                   non-null value or exceeds 300 characters
      * @throws AgentAdmitException
      */
     public function issueToken(
@@ -62,12 +79,30 @@ class TokensClient
         array $scopes,
         ?string $role = null,
         int|string|null $durationSeconds = self::DURATION_DEFAULT,
-        ?string $purpose = null
+        ?string $purpose = null,
+        mixed $userIntent = null
     ): array {
         if ($purpose !== null && mb_strlen($purpose) > self::PURPOSE_MAX_LENGTH) {
             throw new \InvalidArgumentException(
                 'purpose must be ' . self::PURPOSE_MAX_LENGTH . ' characters or fewer'
             );
+        }
+
+        // Outbound user-declared intent validates like purpose (the cross-SDK
+        // parity convention): reject before any request rather than silently
+        // discarding the user's typed words. null / '' stay omitted.
+        if ($userIntent !== null) {
+            if (!is_string($userIntent)) {
+                throw new \InvalidArgumentException('user_intent must be a string');
+            }
+            if (mb_strlen($userIntent) > self::USER_INTENT_MAX_LENGTH) {
+                throw new \InvalidArgumentException(
+                    'user_intent must be ' . self::USER_INTENT_MAX_LENGTH . ' characters or fewer'
+                );
+            }
+            if ($userIntent === '') {
+                $userIntent = null;
+            }
         }
 
         $appId = $this->config['app_id'] ?? '';
@@ -88,6 +123,9 @@ class TokensClient
         }
         if ($purpose !== null) {
             $body['purpose'] = $purpose;
+        }
+        if ($userIntent !== null) {
+            $body['user_intent'] = $userIntent;
         }
 
         return $this->post($url, $body, 'issueToken', authenticated: true);

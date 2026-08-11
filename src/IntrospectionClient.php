@@ -212,6 +212,14 @@ class IntrospectionClient
                     purpose: isset($data['purpose']) && is_string($data['purpose'])
                         ? $data['purpose']
                         : null,
+                    // User-declared intent rides along when the platform
+                    // returns it (additive; nullable) — the USER's own words,
+                    // distinct from purpose (the app's words). Same tolerance
+                    // as purpose: a malformed (non-string) value is treated
+                    // as absent rather than failing the verify.
+                    userIntent: isset($data['user_intent']) && is_string($data['user_intent'])
+                        ? $data['user_intent']
+                        : null,
                 );
             } catch (AgentAdmitException $e) {
                 throw $e;

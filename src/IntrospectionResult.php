@@ -24,6 +24,15 @@ class IntrospectionResult
          * older servers that omit the field).
          */
         public readonly ?string $purpose = null,
+        /**
+         * User-declared intent: the USER's own words, typed by the human at
+         * the consent moment (distinct from $purpose, which is the app's
+         * words). Review-time record only, never an enforcement input;
+         * authorization decisions ride scopes, connection status, and
+         * consent. Null when the connection was minted without one (or on
+         * older servers that omit the field).
+         */
+        public readonly ?string $userIntent = null,
     ) {}
 
     public function hasScope(string $scope): bool
