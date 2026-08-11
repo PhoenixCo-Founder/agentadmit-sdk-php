@@ -53,9 +53,11 @@ class TokensClient
      * The user-declared intent is the USER's own words, typed by the human at
      * the consent moment (distinct from the declared purpose, which is the
      * app's words). Same semantics: a review-time record only, never an
-     * enforcement input. Metadata tolerance, never a rejection: a malformed
-     * user intent (non-string, empty, or longer than 300 characters) is
-     * normalized to absent and the key is omitted from the request.
+     * enforcement input. Outbound validation mirrors purpose: a non-string,
+     * non-null value or a value longer than 300 characters throws
+     * InvalidArgumentException before any request is sent (silently dropping
+     * the user's typed words would be data loss). null and the empty string
+     * are omitted from the request.
      *
      * @param string      $userId          Your app's identifier for the user
      * @param array       $scopes          Scopes the connection grants
@@ -63,12 +65,13 @@ class TokensClient
      * @param int|string|null $durationSeconds See above
      * @param string|null $purpose         Declared purpose (max 300 characters);
      *                                     omitted from the request when null
-     * @param mixed       $userIntent      User-declared intent (string, 1–300
-     *                                     characters); malformed values are
-     *                                     normalized to absent, and the key is
-     *                                     omitted from the request when absent
+     * @param mixed       $userIntent      User-declared intent (string, max 300
+     *                                     characters); omitted from the request
+     *                                     when null or empty
      * @return array The issue response — ['token' => 'ag_ct_…', 'expires_in' => …, …]
-     * @throws \InvalidArgumentException When $purpose exceeds 300 characters
+     * @throws \InvalidArgumentException When $purpose exceeds 300 characters, or
+     *                                   when $userIntent is a non-string,
+     *                                   non-null value or exceeds 300 characters
      * @throws AgentAdmitException
      */
     public function issueToken(
@@ -85,14 +88,21 @@ class TokensClient
             );
         }
 
-        // User-declared intent is metadata: tolerance, never a rejection (the
-        // cross-SDK parity convention). Anything that is not a string of 1–300
-        // characters normalizes to absent.
-        if (!is_string($userIntent)
-            || $userIntent === ''
-            || mb_strlen($userIntent) > self::USER_INTENT_MAX_LENGTH
-        ) {
-            $userIntent = null;
+        // Outbound user-declared intent validates like purpose (the cross-SDK
+        // parity convention): reject before any request rather than silently
+        // discarding the user's typed words. null / '' stay omitted.
+        if ($userIntent !== null) {
+            if (!is_string($userIntent)) {
+                throw new \InvalidArgumentException('user_intent must be a string');
+            }
+            if (mb_strlen($userIntent) > self::USER_INTENT_MAX_LENGTH) {
+                throw new \InvalidArgumentException(
+                    'user_intent must be ' . self::USER_INTENT_MAX_LENGTH . ' characters or fewer'
+                );
+            }
+            if ($userIntent === '') {
+                $userIntent = null;
+            }
         }
 
         $appId = $this->config['app_id'] ?? '';

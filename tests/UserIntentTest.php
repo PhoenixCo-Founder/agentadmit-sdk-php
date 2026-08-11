@@ -19,11 +19,11 @@ use PHPUnit\Framework\TestCase;
  *
  * TokensClient::issueToken() must:
  *  - include 'user_intent' in the POST body when a valid string is provided
- *  - omit the key entirely when not provided
- *  - normalize malformed values to absent (metadata tolerance, never a
- *    rejection - the cross-SDK parity convention): non-string, empty string,
- *    and >300-character values all mean the key is omitted while the request
- *    still goes out
+ *  - omit the key entirely when not provided (null) or empty
+ *  - reject non-string, non-null values and >300-character values client-side
+ *    with InvalidArgumentException BEFORE any request goes out (outbound
+ *    validation mirrors purpose - the cross-SDK parity convention; silently
+ *    dropping the user's typed words would be data loss)
  *
  * IntrospectionClient::verify() must pass the nullable 'user_intent' the
  * hosted /verify returns through to IntrospectionResult unchanged.
@@ -136,29 +136,31 @@ class UserIntentTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // issueToken() - malformed values normalize to absent (never a rejection)
+    // issueToken() - malformed values are rejected client-side (like purpose)
     // -------------------------------------------------------------------------
 
-    public function testIssueTokenNormalizesUserIntentOver300CharactersToAbsent(): void
+    public function testIssueTokenRejectsUserIntentOver300Characters(): void
     {
-        // Unlike purpose (client-side InvalidArgumentException), a too-long
-        // user intent is metadata tolerance: the request still goes out, the
-        // key is simply omitted.
+        // Like purpose: rejected client-side with InvalidArgumentException,
+        // never silently dropped (that would be losing the user's own words).
         $this->fakeIssueResponse();
 
-        $this->tokensClient()->issueToken(
-            'user_42',
-            ['read:orders'],
-            userIntent: str_repeat('a', 301)
-        );
+        try {
+            $this->tokensClient()->issueToken(
+                'user_42',
+                ['read:orders'],
+                userIntent: str_repeat('a', 301)
+            );
+            $this->fail('Expected InvalidArgumentException for a 301-character user intent');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertStringContainsString('300', $e->getMessage());
+        }
 
-        Http::assertSent(function ($req) {
-            return str_contains($req->url(), '/api/v1/apps/app_test123/token')
-                && !array_key_exists('user_intent', $req->data());
-        });
+        // Rejected client-side: nothing goes over the wire.
+        Http::assertNothingSent();
     }
 
-    public function testIssueTokenNormalizesEmptyStringUserIntentToAbsent(): void
+    public function testIssueTokenOmitsEmptyStringUserIntent(): void
     {
         $this->fakeIssueResponse();
 
@@ -167,20 +169,23 @@ class UserIntentTest extends TestCase
         Http::assertSent(fn ($req) => !array_key_exists('user_intent', $req->data()));
     }
 
-    public function testIssueTokenNormalizesNonStringUserIntentToAbsent(): void
+    public function testIssueTokenRejectsNonStringUserIntent(): void
     {
-        // Metadata tolerance, never a rejection: malformed values are treated
-        // as absent, and the request itself still succeeds.
+        // Outbound validation mirrors purpose: a non-string, non-null value is
+        // a caller bug, rejected before any request is sent.
         foreach ([42, true, ['nested' => 'x'], 3.14] as $bad) {
             Http::swap(new Factory());
             $this->fakeIssueResponse();
 
-            $this->tokensClient()->issueToken('user_42', ['read:orders'], userIntent: $bad);
+            try {
+                $this->tokensClient()->issueToken('user_42', ['read:orders'], userIntent: $bad);
+                $this->fail('Expected InvalidArgumentException for non-string user intent: ' . gettype($bad));
+            } catch (\InvalidArgumentException $e) {
+                $this->assertStringContainsString('string', $e->getMessage());
+            }
 
-            Http::assertSent(function ($req) {
-                return str_contains($req->url(), '/api/v1/apps/app_test123/token')
-                    && !array_key_exists('user_intent', $req->data());
-            });
+            // Rejected client-side: nothing goes over the wire.
+            Http::assertNothingSent();
         }
     }
 

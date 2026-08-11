@@ -161,7 +161,7 @@ $issued = $tokens->issueToken(
 );
 ```
 
-Metadata tolerance, never a rejection: unlike `purpose` (which throws client-side beyond 300 characters), a malformed `user_intent`  -  non-string, empty, or longer than 300 characters  -  is normalized to absent and the key is omitted from the request entirely.
+Outbound validation mirrors `purpose`: a `user_intent` longer than 300 characters, or any non-string, non-null value, throws `InvalidArgumentException` client-side before any request is sent  -  the user's own typed words are never silently discarded. `null` and the empty string are simply omitted from the request. (Verify-side parsing stays tolerant: a malformed `user_intent` in the `/verify` response is normalized to `null`, never a failure.)
 
 On the verify side, the result carries the nullable user-declared intent for display and review:
 
