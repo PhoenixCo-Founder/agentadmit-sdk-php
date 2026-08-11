@@ -21,6 +21,9 @@ class TokensClient
     /** Maximum length (characters) of a declared purpose. */
     public const PURPOSE_MAX_LENGTH = 300;
 
+    /** Maximum length (characters) of a user-declared intent. */
+    public const USER_INTENT_MAX_LENGTH = 300;
+
     private array $config;
 
     public function __construct(array $config)
@@ -47,12 +50,23 @@ class TokensClient
      * review-time record only, never an enforcement input; authorization
      * decisions ride scopes, connection status, and consent.
      *
+     * The user-declared intent is the USER's own words, typed by the human at
+     * the consent moment (distinct from the declared purpose, which is the
+     * app's words). Same semantics: a review-time record only, never an
+     * enforcement input. Metadata tolerance, never a rejection: a malformed
+     * user intent (non-string, empty, or longer than 300 characters) is
+     * normalized to absent and the key is omitted from the request.
+     *
      * @param string      $userId          Your app's identifier for the user
      * @param array       $scopes          Scopes the connection grants
      * @param string|null $role            The user's role on the connection
      * @param int|string|null $durationSeconds See above
      * @param string|null $purpose         Declared purpose (max 300 characters);
      *                                     omitted from the request when null
+     * @param mixed       $userIntent      User-declared intent (string, 1–300
+     *                                     characters); malformed values are
+     *                                     normalized to absent, and the key is
+     *                                     omitted from the request when absent
      * @return array The issue response — ['token' => 'ag_ct_…', 'expires_in' => …, …]
      * @throws \InvalidArgumentException When $purpose exceeds 300 characters
      * @throws AgentAdmitException
@@ -62,12 +76,23 @@ class TokensClient
         array $scopes,
         ?string $role = null,
         int|string|null $durationSeconds = self::DURATION_DEFAULT,
-        ?string $purpose = null
+        ?string $purpose = null,
+        mixed $userIntent = null
     ): array {
         if ($purpose !== null && mb_strlen($purpose) > self::PURPOSE_MAX_LENGTH) {
             throw new \InvalidArgumentException(
                 'purpose must be ' . self::PURPOSE_MAX_LENGTH . ' characters or fewer'
             );
+        }
+
+        // User-declared intent is metadata: tolerance, never a rejection (the
+        // cross-SDK parity convention). Anything that is not a string of 1–300
+        // characters normalizes to absent.
+        if (!is_string($userIntent)
+            || $userIntent === ''
+            || mb_strlen($userIntent) > self::USER_INTENT_MAX_LENGTH
+        ) {
+            $userIntent = null;
         }
 
         $appId = $this->config['app_id'] ?? '';
@@ -88,6 +113,9 @@ class TokensClient
         }
         if ($purpose !== null) {
             $body['purpose'] = $purpose;
+        }
+        if ($userIntent !== null) {
+            $body['user_intent'] = $userIntent;
         }
 
         return $this->post($url, $body, 'issueToken', authenticated: true);

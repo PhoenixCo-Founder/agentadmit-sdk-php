@@ -146,6 +146,32 @@ $result->purpose; // 'Reorder the usual weekly groceries', or null when none was
 
 `purpose` is `null` for connections minted without one and on older servers that omit the field. Do not branch authorization on it  -  `/verify` never gates on the purpose, and neither should your app.
 
+## User-Declared Intent
+
+User-declared intent: the user's own words, typed by the human at the consent moment. It is distinct from `purpose`  -  `purpose` is the app's words, `user_intent` is the user's. Like the declared purpose, it is a review-time record only, never an enforcement input; authorization decisions ride scopes, connection status, and consent.
+
+Pass an optional `user_intent` (1-300 characters) when issuing a connection token. It flows exactly like the declared purpose: recorded on the grant, returned from `/verify` introspection, stamped into audit log rows, and carried on ledger events. When the hosted presence ceremony runs, the user-declared intent is included in the verifiable-consent-evidence commitment.
+
+```php
+$issued = $tokens->issueToken(
+    'user_42',
+    ['read:orders'],
+    purpose: 'Reorder the usual weekly groceries', // the app's words
+    userIntent: 'get my usual Tuesday order',      // the user's own words
+);
+```
+
+Metadata tolerance, never a rejection: unlike `purpose` (which throws client-side beyond 300 characters), a malformed `user_intent`  -  non-string, empty, or longer than 300 characters  -  is normalized to absent and the key is omitted from the request entirely.
+
+On the verify side, the result carries the nullable user-declared intent for display and review:
+
+```php
+$result = $introspectionClient->verify($token);
+$result->userIntent; // 'get my usual Tuesday order', or null when none was declared
+```
+
+`userIntent` is `null` for connections minted without one and on older servers that omit the field. Do not branch authorization on it  -  like the purpose, `/verify` never gates on it, and neither should your app.
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The PHP SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  -  no changes needed in your middleware code.
@@ -299,13 +325,16 @@ $tokens = app(TokensClient::class);
 //   null                                  → until the user revokes
 //   int seconds (60–31536000)             → explicit duration
 // The optional purpose (max 300 chars) is shown to the human at the consent
-// moment and recorded on the grant — see "Declared Purpose" above.
+// moment and recorded on the grant — see "Declared Purpose" above. The
+// optional userIntent (1-300 chars) is the user's own words — see
+// "User-Declared Intent" above.
 $issued = $tokens->issueToken(
     'user_42',
     ['read:orders'],
     role: 'user',
     durationSeconds: null,
     purpose: 'Reorder the usual weekly groceries',
+    userIntent: 'get my usual Tuesday order',
 );
 $connectionToken = $issued['token']; // ag_ct_…
 
