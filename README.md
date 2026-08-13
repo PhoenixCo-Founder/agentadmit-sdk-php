@@ -172,6 +172,24 @@ $result->userIntent; // 'get my usual Tuesday order', or null when none was decl
 
 `userIntent` is `null` for connections minted without one and on older servers that omit the field. Do not branch authorization on it  -  like the purpose, `/verify` never gates on it, and neither should your app.
 
+## App-Attested Presence
+
+If your app gates token minting behind its own embedded passkey/WebAuthn ceremony, AgentAdmit never witnesses that ceremony (it is origin-bound), so by default the hosted service reports `presence.verified: false` for those connections. Attest the ceremony fact at issuance to close that gap  -  AFTER verifying and consuming your own fresh, purpose-bound attestation:
+
+```php
+use AgentAdmit\AppAttestedPresence;
+
+$issued = $tokensClient->issueToken(
+    'user_42',
+    ['read:orders'],
+    presence: new AppAttestedPresence('my_webauthn', $attestation->createdAt)
+);
+```
+
+The SDK sends it as `presence: {verified: true, uv: true, method, verified_at}`  -  `verified`/`uv` are literal true by construction and the class cannot represent anything else. The hosted service validates freshness (10-minute window, 60 s future clock-skew slack) and stores the method provenance-marked `app:<method>` so app-attested facts stay distinct from ceremonies AgentAdmit witnessed itself. Introspection, the grant-event ledger, and the evidence API then carry `presence.verified: true` for the connection.
+
+Honesty ceiling: this is your app's attestation, recorded and provenance-marked. It is not witnessed by AgentAdmit and not independently verifiable. Only attest a ceremony that verified the user with UV (biometric or PIN user verification); a ceremony without UV carries no presence fact, so pass `null` (the default). An out-of-contract method (`^[a-z0-9_]+$`, 1-60) throws `InvalidArgumentException` at construction, before any request; `verified_at` serializes RFC 3339 with an explicit offset because `DateTimeInterface` always carries a timezone.
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The PHP SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  -  no changes needed in your middleware code.
