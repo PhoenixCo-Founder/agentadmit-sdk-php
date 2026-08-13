@@ -68,6 +68,15 @@ class TokensClient
      * @param mixed       $userIntent      User-declared intent (string, max 300
      *                                     characters); omitted from the request
      *                                     when null or empty
+     * @param AppAttestedPresence|null $presence App-attested ceremony fact: set it
+     *                                     AFTER verifying and consuming your app's
+     *                                     own fresh, purpose-bound WebAuthn/passkey
+     *                                     attestation for this mint. Forwarded as
+     *                                     presence {verified: true, uv: true,
+     *                                     method, verified_at} and stored
+     *                                     provenance-marked "app:<method>";
+     *                                     omitted when null (omitting the field is
+     *                                     the only way to say "no ceremony")
      * @return array The issue response — ['token' => 'ag_ct_…', 'expires_in' => …, …]
      * @throws \InvalidArgumentException When $purpose exceeds 300 characters, or
      *                                   when $userIntent is a non-string,
@@ -80,7 +89,8 @@ class TokensClient
         ?string $role = null,
         int|string|null $durationSeconds = self::DURATION_DEFAULT,
         ?string $purpose = null,
-        mixed $userIntent = null
+        mixed $userIntent = null,
+        ?AppAttestedPresence $presence = null
     ): array {
         if ($purpose !== null && mb_strlen($purpose) > self::PURPOSE_MAX_LENGTH) {
             throw new \InvalidArgumentException(
@@ -126,6 +136,11 @@ class TokensClient
         }
         if ($userIntent !== null) {
             $body['user_intent'] = $userIntent;
+        }
+        // App-attested presence: verified/uv literal true and verified_at
+        // offset-carrying by construction (the typed class owns the contract).
+        if ($presence !== null) {
+            $body['presence'] = $presence->toWire();
         }
 
         return $this->post($url, $body, 'issueToken', authenticated: true);
