@@ -4,6 +4,7 @@ namespace AgentAdmit\Middleware;
 
 use AgentAdmit\AgentAdmitException;
 use AgentAdmit\IntrospectionClient;
+use AgentAdmit\VerificationDeniedException;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -41,7 +42,16 @@ class RequirePresence
         }
 
         try {
-            $result = $this->client->verify($token);
+            // SDK 1.10: a presence gate enforces no single scope, so
+            // scope_used is omitted - but the request path (query stripped
+            // client-side) and method still ride along for the hosted
+            // per-call audit log.
+            $result = $this->client->verify(
+                $token,
+                null,
+                $request->getPathInfo(),
+                $request->method()
+            );
 
             if (!$result->presenceVerified()) {
                 return response()->json([
@@ -59,6 +69,14 @@ class RequirePresence
 
             return $next($request);
 
+        } catch (VerificationDeniedException $e) {
+            // SDK 1.10: the hosted service refused this otherwise-active call
+            // (active: true + error). Return the typed 403 denial body -
+            // hosted fields verbatim for bound_exceeded, generic fail-closed
+            // for unknown codes.
+            Log::warning('AgentAdmit RequirePresence hosted denial: ' . $e->getMessage());
+
+            return response()->json($e->getDenialBody(), 403);
         } catch (AgentAdmitException $e) {
             // M8: Log internal detail server-side; return a generic message to the caller
             // to avoid leaking verify URLs, cURL errors, or other internal information.
