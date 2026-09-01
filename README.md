@@ -201,7 +201,7 @@ Route::middleware('agentadmit.scope:read:orders')->get('/orders', ...);
 // verify body: {token, scope_used: "read:orders", endpoint: "/orders", method: "GET"}
 ```
 
-Middlewares that enforce no single scope (`agentadmit.presence`, `agentadmit.caller_consent`) report `endpoint` and `method` only. Direct client calls send whatever you provide — every telemetry argument is optional and the signature stays backward-compatible:
+`agentadmit.presence` reports endpoint and method only. `agentadmit.caller_consent:<scope>` reports all three and sets the hosted consent-first guard automatically, so denied caller classes receive no scope-state disclosure. Direct client calls send whatever you provide — every telemetry argument is optional and the signature stays backward-compatible:
 
 ```php
 $result = $introspectionClient->verify($token, 'read:orders', $request->getPathInfo(), $request->method());

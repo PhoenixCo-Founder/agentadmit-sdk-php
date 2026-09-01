@@ -148,25 +148,20 @@ class CallerConsent
     private function handleExternalAgent(Request $request, Closure $next, ?string $scope): Response
     {
         try {
-            // SDK 1.10: endpoint (query stripped client-side) and method ride
-            // along for the hosted per-call audit log. scope_used is
-            // deliberately OMITTED on this path: consent is evaluated BEFORE
-            // scope here (Patent FIG. 3, the 1.5.1 fix), and reporting the
-            // enforced scope would let the hosted service answer with an
-            // active insufficient_scope refusal - leaking scope state to a
-            // caller whose class the owner may have denied. The local scope
-            // check below still runs after the consent decision.
+            // Declare the exact exercised scope in the same hosted round trip.
+            // consent_first guarantees a denied caller class cannot learn
+            // scope state before this middleware returns its consent 403.
             $result = $this->introspection->verify(
                 $request->bearerToken(),
-                null,
+                $scope,
                 $request->getPathInfo(),
-                $request->method()
+                $request->method(),
+                true
             );
         } catch (VerificationDeniedException $e) {
             // SDK 1.10: the hosted service refused this otherwise-active call
             // (active: true + error, e.g. bound_exceeded). Fail closed with
-            // the typed denial body; no scope state rides on this path
-            // because scope_used is never sent from this middleware.
+            // the typed denial body.
             Log::warning('AgentAdmit CallerConsent hosted denial: ' . $e->getMessage());
 
             return response()->json($e->getDenialBody(), 403);
