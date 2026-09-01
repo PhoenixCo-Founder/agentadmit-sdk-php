@@ -75,6 +75,7 @@ class IntrospectionClient
      * @param string|null $scopeUsed Single scope enforced for this call, when known
      * @param string|null $endpoint  Inbound request path (query stripped client-side)
      * @param string|null $method    Inbound HTTP method
+     * @param bool        $consentFirst Resolve caller-class consent before scope evaluation
      * @return IntrospectionResult
      * @throws VerificationDeniedException When the hosted service refuses an
      *                                     otherwise-active call (active: true
@@ -86,7 +87,8 @@ class IntrospectionClient
         string $token,
         ?string $scopeUsed = null,
         ?string $endpoint = null,
-        ?string $method = null
+        ?string $method = null,
+        bool $consentFirst = false
     ): IntrospectionResult {
         $prefix = $this->config['token_prefix_access'] ?? 'ag_at_';
 
@@ -98,7 +100,7 @@ class IntrospectionClient
         $verifyUrl  = $this->config['verify_url'] ?? 'https://api.agentadmit.com/api/v1/verify';
         $delayMs    = 1000; // initial backoff: 1 second (in ms)
         $waitedMs   = 0;    // cumulative wait across retries
-        $body       = $this->buildVerifyBody($token, $scopeUsed, $endpoint, $method);
+        $body       = $this->buildVerifyBody($token, $scopeUsed, $endpoint, $method, $consentFirst);
 
         for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
             try {
@@ -284,7 +286,8 @@ class IntrospectionClient
         string $token,
         ?string $scopeUsed,
         ?string $endpoint,
-        ?string $method
+        ?string $method,
+        bool $consentFirst = false
     ): array {
         $body = ['token' => $token];
 
@@ -308,6 +311,10 @@ class IntrospectionClient
 
         if ($method !== null && $method !== '') {
             $body['method'] = substr(strtoupper($method), 0, self::MAX_METHOD_LENGTH);
+        }
+
+        if ($consentFirst) {
+            $body['consent_first'] = true;
         }
 
         return $body;

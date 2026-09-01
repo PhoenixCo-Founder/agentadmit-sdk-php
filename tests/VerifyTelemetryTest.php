@@ -191,12 +191,8 @@ namespace AgentAdmit\Tests {
             ], $this->recordedBody());
         }
 
-        public function testCallerConsentOmitsScopeUsedEvenWhenScopeParamGiven(): void
+        public function testCallerConsentSendsScopeWithConsentFirstOrdering(): void
         {
-            // Deliberate: consent is evaluated BEFORE scope on this path
-            // (Patent FIG. 3 / the 1.5.1 fix), so reporting scope_used would
-            // let the hosted service refuse with insufficient_scope ahead of
-            // the consent decision, leaking scope state to a denied class.
             Http::fake(['*' => Http::response($this->validPayload([
                 'consent' => ['granted' => true],
             ]), 200)]);
@@ -211,9 +207,11 @@ namespace AgentAdmit\Tests {
             $this->assertSame(200, $response->getStatusCode());
             $this->assertTrue($nextCalled);
             $this->assertSame([
-                'token'    => 'ag_at_dummy',
-                'endpoint' => '/api/records/7',
-                'method'   => 'GET',
+                'token'         => 'ag_at_dummy',
+                'scope_used'    => 'read:orders',
+                'endpoint'      => '/api/records/7',
+                'method'        => 'GET',
+                'consent_first' => true,
             ], $this->recordedBody());
         }
 
