@@ -190,6 +190,39 @@ The SDK sends it as `presence: {verified: true, uv: true, method, verified_at}` 
 
 Honesty ceiling: this is your app's attestation, recorded and provenance-marked. It is not witnessed by AgentAdmit and not independently verifiable. Only attest a ceremony that verified the user with UV (biometric or PIN user verification); a ceremony without UV carries no presence fact, so pass `null` (the default). An out-of-contract method (`^[a-z0-9_]+$`, 1-60) throws `InvalidArgumentException` at construction, before any request; `verified_at` serializes RFC 3339 with an explicit offset because `DateTimeInterface` always carries a timezone.
 
+## Per-Call Audit Telemetry
+
+Every verified call reports what it actually exercised. On each introspection the SDK sends, alongside the token, the scope the middleware enforced for that call (`scope_used`), the request path (`endpoint`), and the HTTP method (`method`), and the hosted service records them in the app's tamper-evident audit log — so an audit row answers "which scope, which endpoint, which method" per call, not just "a token was checked".
+
+The scope middlewares (`agentadmit.scope`, `agentadmit.scope_if_agent`) report all three automatically — the middleware parameter is the enforced scope:
+
+```php
+Route::middleware('agentadmit.scope:read:orders')->get('/orders', ...);
+// verify body: {token, scope_used: "read:orders", endpoint: "/orders", method: "GET"}
+```
+
+Middlewares that enforce no single scope (`agentadmit.presence`, `agentadmit.caller_consent`) report `endpoint` and `method` only. Direct client calls send whatever you provide — every telemetry argument is optional and the signature stays backward-compatible:
+
+```php
+$result = $introspectionClient->verify($token, 'read:orders', $request->getPathInfo(), $request->method());
+```
+
+Honesty rules:
+
+- **Omitted means omitted.** A field that is not known is left out of the request entirely (never `null` or an empty string), and the hosted audit row honestly records it as "not reported" rather than inventing a value.
+- **No query strings.** The endpoint is the path only  -  the SDK strips everything from the first `?` or `#` client-side before sending, because query strings can carry PII. Paths are truncated to 500 characters; methods are uppercased and capped at 20.
+- `scope_used` is the single declared scope the integration point enforced for that call, never a joined list of everything granted.
+
+### Hosted refusals fail closed
+
+As of 1.10.0 the SDK also treats an `active: true` introspection response that carries a string `error` field as a refusal of that call, never a pass-through:
+
+- `insufficient_scope` → the middleware returns `403 {error, required_scope, granted_scopes}` (the standard step-up shape).
+- `bound_exceeded` → `403` with the hosted `error_description`, `bound`, and `renewal` fields passed through verbatim (the connection's bounded capability is exhausted; the token itself stays valid).
+- Any refusal code this SDK version does not recognize → `403 {error: <code>, error_description: "Call refused by the authorization service."}` — unknown hosted verdicts never become an allow.
+
+`IntrospectionClient::verify()` surfaces these as `VerificationDeniedException` (a 403 `AgentAdmitException` subclass); `getDenialBody()` is the exact JSON body the middlewares return.
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The PHP SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  -  no changes needed in your middleware code.
@@ -255,7 +288,7 @@ The AgentAdmit PHP SDK runs server-side and does not interact with app stores or
 - Manages connection lifecycle (issue, exchange, revoke) via the AgentAdmit hosted service
 
 ### What the SDK does NOT do
-- Does not transmit raw end-user PII (such as name, email, or device identifiers)  -  each introspection request sends the opaque access token and your API key
+- Does not transmit raw end-user PII (such as name, email, or device identifiers)  -  each introspection request sends the opaque access token, your API key, and the per-call audit telemetry described above (the enforced scope, the request path with the query string stripped client-side, and the HTTP method)
 - Does not perform passive background telemetry or analytics  -  network calls occur only during active token validation
 - Does not maintain its own persistent storage; connection state and audit logs are held by the AgentAdmit hosted service
 

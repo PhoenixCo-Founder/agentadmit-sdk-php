@@ -4,6 +4,7 @@ namespace AgentAdmit\Middleware;
 
 use AgentAdmit\AgentAdmitException;
 use AgentAdmit\IntrospectionClient;
+use AgentAdmit\VerificationDeniedException;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -38,7 +39,16 @@ class RequireScope
         }
 
         try {
-            $result = $this->client->verify($token);
+            // SDK 1.10: the scope this middleware enforces IS known at verify
+            // time, so it rides in the verify body as scope_used, alongside
+            // the request path (query stripped client-side) and method, for
+            // the hosted per-call audit log.
+            $result = $this->client->verify(
+                $token,
+                $scope,
+                $request->getPathInfo(),
+                $request->method()
+            );
 
             if (!$result->hasScope($scope)) {
                 return response()->json([
@@ -58,6 +68,14 @@ class RequireScope
 
             return $next($request);
 
+        } catch (VerificationDeniedException $e) {
+            // SDK 1.10: the hosted service refused this otherwise-active call
+            // (active: true + error). Return the typed 403 denial body -
+            // step-up shape for insufficient_scope, hosted fields verbatim
+            // for bound_exceeded, generic fail-closed for unknown codes.
+            Log::warning('AgentAdmit RequireScope hosted denial: ' . $e->getMessage());
+
+            return response()->json($e->getDenialBody(), 403);
         } catch (AgentAdmitException $e) {
             // M8: Log internal detail server-side; return a generic message to the caller
             // to avoid leaking verify URLs, cURL errors, or other internal information.

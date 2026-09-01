@@ -30,6 +30,12 @@ class IntrospectionClient
     public const ERROR_ENVIRONMENT_MISMATCH = 'environment_mismatch';
     public const ERROR_INSUFFICIENT_SCOPE   = 'insufficient_scope';
 
+    /** Hosted cap on the reported endpoint path (chars). */
+    public const MAX_ENDPOINT_LENGTH = 500;
+
+    /** Hosted cap on the reported HTTP method (chars). */
+    public const MAX_METHOD_LENGTH = 20;
+
     private array $config;
 
     public function __construct(array $config)
@@ -53,13 +59,35 @@ class IntrospectionClient
      * Automatically retries on HTTP 429 with exponential backoff + jitter.
      * Throws {@see RateLimitException} when retries are exhausted.
      *
-     * @param string $token The full token including ag_at_ prefix
+     * SDK 1.10 per-call audit telemetry: the three optional parameters ride in
+     * the verify body so the hosted audit log records what each call actually
+     * exercised. Each is sent when known and omitted entirely when not (never
+     * null / empty string):
+     *
+     *  - $scopeUsed: the single scope the integration point enforces for THIS
+     *    call (the scope-middleware parameter). Omit for presence-only gates
+     *    and bare auth resolution. Never a joined list.
+     *  - $endpoint:  the inbound request path. The client strips any query
+     *    string (queries can carry PII) and truncates to 500 chars.
+     *  - $method:    the HTTP method; uppercased, capped at 20 chars.
+     *
+     * @param string      $token     The full token including ag_at_ prefix
+     * @param string|null $scopeUsed Single scope enforced for this call, when known
+     * @param string|null $endpoint  Inbound request path (query stripped client-side)
+     * @param string|null $method    Inbound HTTP method
      * @return IntrospectionResult
+     * @throws VerificationDeniedException When the hosted service refuses an
+     *                                     otherwise-active call (active: true
+     *                                     with a string error field)
      * @throws AgentAdmitException
      * @throws RateLimitException
      */
-    public function verify(string $token): IntrospectionResult
-    {
+    public function verify(
+        string $token,
+        ?string $scopeUsed = null,
+        ?string $endpoint = null,
+        ?string $method = null
+    ): IntrospectionResult {
         $prefix = $this->config['token_prefix_access'] ?? 'ag_at_';
 
         if (!str_starts_with($token, $prefix)) {
@@ -70,6 +98,7 @@ class IntrospectionClient
         $verifyUrl  = $this->config['verify_url'] ?? 'https://api.agentadmit.com/api/v1/verify';
         $delayMs    = 1000; // initial backoff: 1 second (in ms)
         $waitedMs   = 0;    // cumulative wait across retries
+        $body       = $this->buildVerifyBody($token, $scopeUsed, $endpoint, $method);
 
         for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
             try {
@@ -78,7 +107,7 @@ class IntrospectionClient
                         'Authorization' => 'Bearer ' . ($this->config['api_key'] ?? ''),
                         'Content-Type' => 'application/json',
                     ])
-                    ->post($verifyUrl, ['token' => $token]);
+                    ->post($verifyUrl, $body);
             } catch (\Exception $e) {
                 Log::error('AgentAdmit introspection failed: ' . $e->getMessage());
                 throw new AgentAdmitException('Introspection failed: ' . $e->getMessage(), 502);
@@ -159,14 +188,17 @@ class IntrospectionClient
                     throw new AgentAdmitException('Token is not active: ' . $reason, 401, $reason);
                 }
 
-                // insufficient_scope arrives with active: true (token valid,
-                // requested scope not granted) - treat it as a 403.
-                if (($data['error'] ?? null) === self::ERROR_INSUFFICIENT_SCOPE) {
-                    throw new AgentAdmitException(
-                        $data['error_description'] ?? 'Scope not granted',
-                        403,
-                        self::ERROR_INSUFFICIENT_SCOPE
-                    );
+                // SDK 1.10 fail-closed: an active response that carries a
+                // string error field is a DENIAL, never a pass-through. The
+                // token is valid but the hosted service refused THIS call -
+                // insufficient_scope (scope not granted), bound_exceeded
+                // (bounded capability exhausted), or any refusal class this
+                // SDK version does not know yet. Generalizes the previous
+                // insufficient_scope-only special case: 1.9.0 checked only
+                // `active` and allowed bound-exceeded calls through.
+                $activeError = $data['error'] ?? null;
+                if (is_string($activeError) && $activeError !== '') {
+                    throw VerificationDeniedException::fromActiveError($activeError, $data, $scopeUsed);
                 }
 
                 // M5: Validate consumed string fields and scopes type.
@@ -236,6 +268,50 @@ class IntrospectionClient
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * SDK 1.10: build the verify POST body - the token plus the optional
+     * per-call audit telemetry. Every telemetry field is sent only when known
+     * and omitted entirely otherwise (never null / empty string):
+     *
+     *  - scope_used: passed through as given (the single enforced scope).
+     *  - endpoint:   path only - everything from the first '?' or '#' on is
+     *    stripped client-side (query strings can carry PII), then truncated
+     *    to {@see MAX_ENDPOINT_LENGTH} chars.
+     *  - method:     uppercased, truncated to {@see MAX_METHOD_LENGTH} chars.
+     */
+    private function buildVerifyBody(
+        string $token,
+        ?string $scopeUsed,
+        ?string $endpoint,
+        ?string $method
+    ): array {
+        $body = ['token' => $token];
+
+        if ($scopeUsed !== null && $scopeUsed !== '') {
+            $body['scope_used'] = $scopeUsed;
+        }
+
+        if ($endpoint !== null && $endpoint !== '') {
+            $path = $endpoint;
+            foreach (['?', '#'] as $sep) {
+                $pos = strpos($path, $sep);
+                if ($pos !== false) {
+                    $path = substr($path, 0, $pos);
+                }
+            }
+            $path = substr($path, 0, self::MAX_ENDPOINT_LENGTH);
+            if ($path !== '') {
+                $body['endpoint'] = $path;
+            }
+        }
+
+        if ($method !== null && $method !== '') {
+            $body['method'] = substr(strtoupper($method), 0, self::MAX_METHOD_LENGTH);
+        }
+
+        return $body;
+    }
 
     /**
      * M5: Validate the introspection payload structure.
