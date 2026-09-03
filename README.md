@@ -215,6 +215,49 @@ Honesty rules:
 - **No query strings.** The endpoint is the path only  -  the SDK strips everything from the first `?` or `#` client-side before sending, because query strings can carry PII. Paths are truncated to 500 characters; methods are uppercased and capped at 20.
 - `scope_used` is the single declared scope the integration point enforced for that call, never a joined list of everything granted.
 
+## Confirm Each Time (Exercise-Time Human Confirmation)
+
+Some actions should never run on a standing grant alone: moving money,
+sending or publishing on the user's behalf, deleting data, or touching
+production. Mark those scopes `confirm_each_time: true` when you register
+them. Every call that exercises one then requires a fresh human confirmation.
+
+Configure a plain-language summary for the action and name it as the second
+middleware parameter:
+
+```php
+// config/agentadmit.php
+'confirm_each_time' => [
+    'action_summary' => null,
+    'summaries' => [
+        'pay' => fn ($request) => 'Pay ' . $request->input('trainer')
+            . ' $' . $request->input('amount'),
+    ],
+],
+
+// routes/api.php
+Route::middleware('agentadmit.scope:write:payments,pay')->post('/payments', ...);
+```
+
+The first call is refused with HTTP 403 and a `confirmation_required` body.
+The agent gives `confirmation.action_session_url` to the human. After the
+human confirms on AgentAdmit's hosted page with their passkey, the agent
+retries the same request with
+`X-AgentAdmit-Action-Attestation: <action_session_id>`.
+
+The SDK always forwards that header. A configured summary also causes the
+middleware to send a `sha256:` digest of the raw request body and the summary;
+the hosted signature commits to the scope, method, endpoint, digest, and the
+words shown to the human. AgentAdmit proves what was shown but does not verify
+the summary against the request.
+
+Custom gates receive a typed `ConfirmationRequiredException` carrying the
+strictly parsed ceremony. Malformed ceremony blocks remain generic
+fail-closed `VerificationDeniedException` instances with no link. On an
+accepted retry, `$result->actionConfirmation` and the
+`agentadmit.action_confirmation` request attribute expose the consumed
+ceremony so your own transaction step-up can avoid asking the human twice.
+
 ### Hosted refusals fail closed
 
 As of 1.10.0 the SDK also treats an `active: true` introspection response that carries a string `error` field as a refusal of that call, never a pass-through:
