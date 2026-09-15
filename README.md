@@ -221,9 +221,64 @@ As of 1.10.0 the SDK also treats an `active: true` introspection response that c
 
 - `insufficient_scope` → the middleware returns `403 {error, required_scope, granted_scopes}` (the standard step-up shape).
 - `bound_exceeded` → `403` with the hosted `error_description`, `bound`, and `renewal` fields passed through verbatim (the connection's bounded capability is exhausted; the token itself stays valid).
+- `confirmation_required` → `403` with the hosted `error_description` and the strictly parsed `confirmation` block (`attestation_status`, `attestation_description`, and `renewal` ride along when sent); surfaced to custom gates as the typed `ConfirmationRequiredException`. See [Confirm Each Time](#confirm-each-time-exercise-time-human-confirmation) below.
 - Any refusal code this SDK version does not recognize → `403 {error: <code>, error_description: "Call refused by the authorization service."}` — unknown hosted verdicts never become an allow.
 
 `IntrospectionClient::verify()` surfaces these as `VerificationDeniedException` (a 403 `AgentAdmitException` subclass); `getDenialBody()` is the exact JSON body the middlewares return.
+
+## Confirm Each Time (Exercise-Time Human Confirmation)
+
+Some actions should never run on a standing grant alone: moving money, sending or publishing on the user's behalf, deleting data, or touching production. Mark those scopes `confirm_each_time: true` when you register them in the AgentAdmit dashboard — this SDK publishes no scope catalog, so the flag lives on the hosted scope definition and the hosted service enforces it. Every call that exercises one then requires a fresh human confirmation, even inside a valid connection.
+
+Optionally describe the action for the human. Configure a plain-language summary hook and name it as the second middleware parameter (`agentadmit.scope`, `agentadmit.scope_if_agent`, and `agentadmit.caller_consent` all accept it):
+
+```php
+// config/agentadmit.php
+'confirm_each_time' => [
+    'action_summary' => null, // app-wide default hook, or null for none
+    'summaries' => [
+        'pay' => fn ($request) => 'Pay ' . $request->input('trainer')
+            . ' $' . $request->input('amount'),
+    ],
+],
+
+// routes/api.php
+Route::middleware('agentadmit.scope:write:payments,pay')->post('/payments', ...);
+```
+
+How a call flows:
+
+1. The agent calls your route. The middleware verifies the token as usual, carrying the exercised scope. With a summary hook configured it also sends a `sha256:` digest of the raw request body (`request_digest`) and the summary (`action_summary`), so the ceremony commits to the exact payload and the words the human sees.
+2. The hosted service refuses the first call with `confirmation_required` and stages a one-time ceremony for exactly that action. Your route returns `403` with a `confirmation` block; the agent gives `confirmation.action_session_url` to the user.
+3. The user confirms on AgentAdmit's hosted page with their passkey. The signature commits to the scope, method, endpoint, request digest, and the summary they saw. Only a user-verified ceremony produces an attestation; the agent cannot complete it.
+4. The agent retries the same request with the header `X-AgentAdmit-Action-Attestation: <action_session_id>`. Every AgentAdmit middleware (including `agentadmit.presence`) forwards it as `action_attestation_id`; the hosted service consumes the attestation once (exact action only) and the call proceeds. The audit row names the confirmation.
+
+The 403 body an agent receives on the first call:
+
+```json
+{
+  "error": "confirmation_required",
+  "error_description": "Scope \"write:payments\" requires a fresh human confirmation for each call. ...",
+  "confirmation": {
+    "action_session_id": "asess_...",
+    "action_session_url": "https://agentadmit.com/confirm/action/asess_...",
+    "expires_at": "2026-09-02T18:30:00.000Z",
+    "scope": "write:payments",
+    "method": "POST",
+    "endpoint": "/api/payments",
+    "request_digest": "sha256:...",
+    "summary": "Pay Alex $50"
+  }
+}
+```
+
+Notes:
+
+- The summary is yours. AgentAdmit shows it as the headline of the confirmation page and commits to the text shown; it does not verify the description against the request. A hook that throws or returns an empty value never blocks the call — the summary is simply omitted and the digest still rides along.
+- A confirmation covers exactly one call. A retry with a different body, route, method, or summary is refused again with `attestation_status: "action_mismatch"`.
+- Custom gates: `IntrospectionClient::verify()` throws `ConfirmationRequiredException` (a `VerificationDeniedException`, so existing fail-closed handlers already return the right 403) exposing `getActionSessionUrl()`, `getActionSessionId()`, `getConfirmation()`, and `getAttestationStatus()`; `getDenialBody()` is the exact 403 body above. Direct callers pass the new optional arguments after `$consentFirst`: `verify($token, $scope, $endpoint, $method, false, $actionAttestationId, $requestDigest, $actionSummary)` — each is trimmed, capped (120 / 128 / 200 chars), and omitted when empty.
+- Strict parsing, fail closed: a `confirmation` block missing any of `action_session_id`, `action_session_url`, `expires_at`, or `scope` as strings degrades to a plain `VerificationDeniedException` 403 with no `confirmation` key. The SDK never relays a half-parsed ceremony to a human.
+- On an accepted retry, `$result->actionConfirmation` (`['action_session_id' => ..., 'consumed' => true]`) and the `agentadmit.action_confirmation` request attribute expose the consumed ceremony, so your own transaction step-up can avoid asking the human twice. Absent or malformed blocks are `null`, never partially populated.
 
 ## Rate Limiting
 

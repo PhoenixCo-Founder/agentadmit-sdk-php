@@ -22,6 +22,8 @@ use Symfony\Component\HttpFoundation\Response;
  */
 class RequirePresence
 {
+    use ConfirmsAction;
+
     private IntrospectionClient $client;
 
     public function __construct(IntrospectionClient $client)
@@ -50,7 +52,12 @@ class RequirePresence
                 $token,
                 null,
                 $request->getPathInfo(),
-                $request->method()
+                $request->method(),
+                false,
+                // SDK 1.11: a presence gate declares no scope and no action
+                // summary, but the agent's attestation header still rides
+                // along so a confirmed retry is recognized here too.
+                $this->actionAttestationId($request)
             );
 
             if (!$result->presenceVerified()) {
@@ -66,6 +73,12 @@ class RequirePresence
             $request->attributes->set('agentadmit.scopes', $result->scopes);
             $request->attributes->set('agentadmit.connection_id', $result->connectionId);
             $request->attributes->set('agentadmit.agent_label', $result->agentLabel);
+            // Confirm-each-time (1.11): only set when the hosted service
+            // accepted this call by consuming a fresh human confirmation for
+            // exactly this action.
+            if ($result->actionConfirmation !== null) {
+                $request->attributes->set('agentadmit.action_confirmation', $result->actionConfirmation);
+            }
 
             return $next($request);
 

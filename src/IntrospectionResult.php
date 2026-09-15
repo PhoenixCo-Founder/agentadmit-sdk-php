@@ -33,6 +33,16 @@ class IntrospectionResult
          * older servers that omit the field).
          */
         public readonly ?string $userIntent = null,
+        /**
+         * Confirm-each-time (1.11): the human confirmation this call consumed,
+         * as ['action_session_id' => string, 'consumed' => true]. Present only
+         * when the hosted service accepted THIS call because a fresh
+         * confirmation for exactly this action was consumed; null otherwise
+         * (including on any malformed block, which is dropped rather than
+         * surfaced). An app running its own transaction step-up can treat a
+         * non-null value as that confirmation instead of asking twice.
+         */
+        public readonly ?array $actionConfirmation = null,
     ) {}
 
     public function hasScope(string $scope): bool

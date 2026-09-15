@@ -16,9 +16,16 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * Usage in routes:
  *   Route::middleware('agentadmit.scope_if_agent:read:orders')->get('/api/orders', ...);
+ *
+ * Confirm-each-time (1.11): an optional SECOND parameter names an action
+ * summary hook under `agentadmit.confirm_each_time.summaries`; the agent's
+ * `X-AgentAdmit-Action-Attestation` header is always forwarded, and a
+ * `confirmation_required` refusal becomes a 403 carrying the confirmation link.
  */
 class RequireScopeIfAgent
 {
+    use ConfirmsAction;
+
     private IntrospectionClient $client;
 
     public function __construct(IntrospectionClient $client)
@@ -26,7 +33,7 @@ class RequireScopeIfAgent
         $this->client = $client;
     }
 
-    public function handle(Request $request, Closure $next, string $scope): Response
+    public function handle(Request $request, Closure $next, string $scope, ?string $summaryKey = null): Response
     {
         $token = $request->bearerToken();
         $prefix = config('agentadmit.token_prefix_access', 'ag_at_');
@@ -41,11 +48,20 @@ class RequireScopeIfAgent
             // time, so it rides in the verify body as scope_used, alongside
             // the request path (query stripped client-side) and method, for
             // the hosted per-call audit log.
+            // SDK 1.11 confirm-each-time: the agent's attestation header is
+            // always forwarded; the body digest and the app's action summary
+            // ride along when a summary hook is configured for this route.
+            [$requestDigest, $actionSummary] = $this->confirmEachTimeFields($request, $summaryKey);
+
             $result = $this->client->verify(
                 $token,
                 $scope,
                 $request->getPathInfo(),
-                $request->method()
+                $request->method(),
+                false,
+                $this->actionAttestationId($request),
+                $requestDigest,
+                $actionSummary
             );
 
             if (!$result->hasScope($scope)) {
@@ -62,6 +78,12 @@ class RequireScopeIfAgent
             $request->attributes->set('agentadmit.scopes', $result->scopes);
             $request->attributes->set('agentadmit.connection_id', $result->connectionId);
             $request->attributes->set('agentadmit.agent_label', $result->agentLabel);
+            // Confirm-each-time (1.11): only set when the hosted service
+            // accepted this call by consuming a fresh human confirmation for
+            // exactly this action.
+            if ($result->actionConfirmation !== null) {
+                $request->attributes->set('agentadmit.action_confirmation', $result->actionConfirmation);
+            }
 
             return $next($request);
 

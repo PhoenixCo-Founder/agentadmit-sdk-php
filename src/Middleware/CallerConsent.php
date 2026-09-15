@@ -63,12 +63,17 @@ use Symfony\Component\HttpFoundation\Response;
  *       'gate_human' => false,
  *   ],
  *
- * Usage in routes (scope is the optional middleware parameter):
+ * Usage in routes (scope is the optional middleware parameter; an optional
+ * second parameter names a confirm-each-time action summary hook, 1.11):
  *   Route::middleware('agentadmit.caller_consent:read:records')
  *       ->get('/api/records/{owner_id}', ...);
+ *   Route::middleware('agentadmit.caller_consent:write:payments,pay')
+ *       ->post('/api/records/{owner_id}/pay', ...);
  */
 class CallerConsent
 {
+    use ConfirmsAction;
+
     private IntrospectionClient $introspection;
     private ConsentClient $consent;
 
@@ -101,13 +106,13 @@ class CallerConsent
         return ConsentClient::CALLER_CLASS_HUMAN_SESSION;
     }
 
-    public function handle(Request $request, Closure $next, ?string $scope = null): Response
+    public function handle(Request $request, Closure $next, ?string $scope = null, ?string $summaryKey = null): Response
     {
         $callerClass = $this->classifyCaller($request);
         $request->attributes->set('agentadmit.caller_class', $callerClass);
 
         if ($callerClass === ConsentClient::CALLER_CLASS_EXTERNAL_AGENT) {
-            return $this->handleExternalAgent($request, $next, $scope);
+            return $this->handleExternalAgent($request, $next, $scope, $summaryKey);
         }
 
         if ($callerClass === ConsentClient::CALLER_CLASS_IN_APP_AI) {
@@ -145,9 +150,13 @@ class CallerConsent
      * service omits the block when its consent-store read fails (designed
      * degraded mode), so absence is never a grant.
      */
-    private function handleExternalAgent(Request $request, Closure $next, ?string $scope): Response
+    private function handleExternalAgent(Request $request, Closure $next, ?string $scope, ?string $summaryKey = null): Response
     {
         try {
+            // SDK 1.11 confirm-each-time: attestation header always, digest
+            // and summary when a summary hook is configured for this route.
+            [$requestDigest, $actionSummary] = $this->confirmEachTimeFields($request, $summaryKey);
+
             // Declare the exact exercised scope in the same hosted round trip.
             // consent_first guarantees a denied caller class cannot learn
             // scope state before this middleware returns its consent 403.
@@ -156,7 +165,10 @@ class CallerConsent
                 $scope,
                 $request->getPathInfo(),
                 $request->method(),
-                true
+                true,
+                $this->actionAttestationId($request),
+                $requestDigest,
+                $actionSummary
             );
         } catch (VerificationDeniedException $e) {
             // SDK 1.10: the hosted service refused this otherwise-active call
@@ -234,6 +246,11 @@ class CallerConsent
         $request->attributes->set('agentadmit.connection_id', $result->connectionId);
         $request->attributes->set('agentadmit.agent_label', $result->agentLabel);
         $request->attributes->set('agentadmit.consent', $verdict);
+        // Confirm-each-time (1.11): only when a fresh human confirmation was
+        // consumed for exactly this action.
+        if ($result->actionConfirmation !== null) {
+            $request->attributes->set('agentadmit.action_confirmation', $result->actionConfirmation);
+        }
 
         return $next($request);
     }

@@ -22,6 +22,10 @@ namespace AgentAdmit;
  *    present, the hosted `scopes` array otherwise)
  *  - bound_exceeded     -> {error, error_description, bound?, renewal?}
  *    (hosted fields passed through verbatim)
+ *  - confirmation_required (1.11) -> {error, error_description, confirmation,
+ *    attestation_status?, attestation_description?, renewal?} and a typed
+ *    {@see ConfirmationRequiredException}; a malformed confirmation block
+ *    degrades to the same 403 without the block and without the typed subclass
  *  - anything else      -> {error, error_description: "Call refused by the
  *    authorization service."} (forward-compatible fail-closed)
  */
@@ -104,6 +108,49 @@ class VerificationDeniedException extends AgentAdmitException
             }
 
             return new self($description, self::ERROR_BOUND_EXCEEDED, $body);
+        }
+
+        if ($errorCode === ConfirmationRequiredException::ERROR_CONFIRMATION_REQUIRED) {
+            // SDK 1.11 confirm-each-time: the scope IS granted, but this call
+            // needs a fresh human confirmation. Pass the staged ceremony
+            // through so the agent can hand the link to the human; nothing
+            // else from the wire rides along.
+            $description = is_string($data['error_description'] ?? null)
+                ? $data['error_description']
+                : ConfirmationRequiredException::DEFAULT_DESCRIPTION;
+
+            $body = [
+                'error' => ConfirmationRequiredException::ERROR_CONFIRMATION_REQUIRED,
+                'error_description' => $description,
+            ];
+
+            $confirmation = ConfirmationRequiredException::parseConfirmation($data['confirmation'] ?? null);
+            if ($confirmation !== null) {
+                $body['confirmation'] = $confirmation;
+            }
+
+            $attestationStatus = is_string($data['attestation_status'] ?? null)
+                ? $data['attestation_status']
+                : null;
+            if ($attestationStatus !== null) {
+                $body['attestation_status'] = $attestationStatus;
+            }
+            if (is_string($data['attestation_description'] ?? null)) {
+                $body['attestation_description'] = $data['attestation_description'];
+            }
+            if (is_string($data['renewal'] ?? null)) {
+                $body['renewal'] = $data['renewal'];
+            }
+
+            // A malformed (or absent) confirmation block cannot be relayed to
+            // a human, so it degrades to a plain fail-closed refusal - 403,
+            // no confirmation, no typed exception - rather than shipping a
+            // half-parsed ceremony.
+            if ($confirmation === null) {
+                return new self($description, ConfirmationRequiredException::ERROR_CONFIRMATION_REQUIRED, $body);
+            }
+
+            return new ConfirmationRequiredException($description, $body, $confirmation, $attestationStatus);
         }
 
         // Unknown refusal class on an active response: fail closed with the

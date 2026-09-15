@@ -30,11 +30,38 @@ class IntrospectionClient
     public const ERROR_ENVIRONMENT_MISMATCH = 'environment_mismatch';
     public const ERROR_INSUFFICIENT_SCOPE   = 'insufficient_scope';
 
+    /**
+     * SDK 1.11 confirm-each-time: the token and scope are fine, but THIS call
+     * needs a fresh human confirmation. Arrives with active: true, so it is a
+     * refusal like insufficient_scope. See ConfirmationRequiredException.
+     */
+    public const ERROR_CONFIRMATION_REQUIRED = 'confirmation_required';
+
+    /** Hosted defaults; a non-default api_url derives verify_url (see __construct). */
+    public const DEFAULT_API_URL    = 'https://api.agentadmit.com';
+    public const DEFAULT_VERIFY_URL = 'https://api.agentadmit.com/api/v1/verify';
+
     /** Hosted cap on the reported endpoint path (chars). */
     public const MAX_ENDPOINT_LENGTH = 500;
 
     /** Hosted cap on the reported HTTP method (chars). */
     public const MAX_METHOD_LENGTH = 20;
+
+    /** Hosted cap on the confirm-each-time attestation id (chars). */
+    public const MAX_ATTESTATION_LENGTH = 120;
+
+    /** Hosted cap on the request digest (chars). */
+    public const MAX_DIGEST_LENGTH = 128;
+
+    /** Hosted cap on the app-supplied action summary (chars). */
+    public const MAX_SUMMARY_LENGTH = 200;
+
+    /**
+     * Request header an agent sets on its retry after the human confirmed.
+     * Read case-insensitively from the inbound request; the SDK forwards it
+     * as action_attestation_id on the verify call.
+     */
+    public const ACTION_ATTESTATION_HEADER = 'X-AgentAdmit-Action-Attestation';
 
     private array $config;
 
@@ -48,9 +75,65 @@ class IntrospectionClient
             throw new AgentAdmitException("api_key must start with 'aa_test_' or 'aa_live_'", 401);
         }
 
+        // One hosted-service origin, not two (1.11). An operator who points
+        // api_url somewhere else (staging, a local rig) and leaves verify_url
+        // at its default expects verify to follow - otherwise every per-call
+        // verify silently goes to production while the rest of the SDK talks
+        // to the other service (caught on the TT dogfood rig, Sep 3, 2026).
+        // An explicitly set verify_url always wins.
+        $verifyUrl = $config['verify_url'] ?? self::DEFAULT_VERIFY_URL;
+        $apiUrl    = $config['api_url'] ?? null;
+        if (
+            is_string($verifyUrl)
+            && rtrim($verifyUrl, '/') === self::DEFAULT_VERIFY_URL
+            && is_string($apiUrl)
+            && $apiUrl !== ''
+            && rtrim($apiUrl, '/') !== self::DEFAULT_API_URL
+        ) {
+            $verifyUrl = rtrim($apiUrl, '/') . '/api/v1/verify';
+        }
+
         // M4: Require HTTPS on configurable URLs (HTTP allowed only on loopback).
-        $verifyUrl = $config['verify_url'] ?? 'https://api.agentadmit.com/api/v1/verify';
         AgentAdmitException::assertHttpsUrl($verifyUrl, 'verify_url');
+        $this->config['verify_url'] = $verifyUrl;
+    }
+
+    /**
+     * The verify endpoint this client actually calls, after a non-default
+     * api_url has been allowed to derive it.
+     */
+    public function getVerifyUrl(): string
+    {
+        return $this->config['verify_url'];
+    }
+
+    /**
+     * SDK 1.11: the agent's X-AgentAdmit-Action-Attestation header, trimmed
+     * and capped, or null when absent/blank. Laravel's HeaderBag lookup is
+     * case-insensitive and returns the first value.
+     */
+    public static function attestationFromRequest(\Illuminate\Http\Request $request): ?string
+    {
+        $value = $request->headers->get(self::ACTION_ATTESTATION_HEADER);
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        return substr(trim($value), 0, self::MAX_ATTESTATION_LENGTH);
+    }
+
+    /**
+     * SDK 1.11: "sha256:<hex>" over the RAW request body bytes, so the human's
+     * confirmation covers the exact payload and not merely the route. Null for
+     * an empty body (GET and friends).
+     */
+    public static function requestDigestFor(?string $rawBody): ?string
+    {
+        if ($rawBody === null || $rawBody === '') {
+            return null;
+        }
+
+        return 'sha256:' . hash('sha256', $rawBody);
     }
 
     /**
@@ -76,10 +159,30 @@ class IntrospectionClient
      * @param string|null $endpoint  Inbound request path (query stripped client-side)
      * @param string|null $method    Inbound HTTP method
      * @param bool        $consentFirst Resolve caller-class consent before scope evaluation
+     *
+     * SDK 1.11 confirm-each-time telemetry (all optional, all omitted when
+     * unknown):
+     *
+     *  - $actionAttestationId: the single-use id from a completed hosted
+     *    confirmation ceremony, presented by the agent on its retry via the
+     *    X-AgentAdmit-Action-Attestation header (cap 120).
+     *  - $requestDigest: "sha256:<hex>" over the raw request body, so the
+     *    confirmation covers the exact payload, not just the route (cap 128).
+     *  - $actionSummary: the app's plain-language description of THIS action,
+     *    shown to the human on the hosted confirmation page and committed into
+     *    the signature (cap 200). AgentAdmit does not verify the summary
+     *    against the request; it proves what the human was shown.
+     *
+     * @param string|null $actionAttestationId Attestation id from the agent's retry header
+     * @param string|null $requestDigest       sha256: digest of the raw request body
+     * @param string|null $actionSummary       Plain-language description of this action
      * @return IntrospectionResult
      * @throws VerificationDeniedException When the hosted service refuses an
      *                                     otherwise-active call (active: true
-     *                                     with a string error field)
+     *                                     with a string error field); the
+     *                                     ConfirmationRequiredException
+     *                                     subclass carries the staged
+     *                                     confirmation ceremony (1.11)
      * @throws AgentAdmitException
      * @throws RateLimitException
      */
@@ -88,7 +191,10 @@ class IntrospectionClient
         ?string $scopeUsed = null,
         ?string $endpoint = null,
         ?string $method = null,
-        bool $consentFirst = false
+        bool $consentFirst = false,
+        ?string $actionAttestationId = null,
+        ?string $requestDigest = null,
+        ?string $actionSummary = null
     ): IntrospectionResult {
         $prefix = $this->config['token_prefix_access'] ?? 'ag_at_';
 
@@ -97,10 +203,19 @@ class IntrospectionClient
         }
 
         $maxRetries = (int) ($this->config['max_retries'] ?? 3);
-        $verifyUrl  = $this->config['verify_url'] ?? 'https://api.agentadmit.com/api/v1/verify';
+        $verifyUrl  = $this->config['verify_url'] ?? self::DEFAULT_VERIFY_URL;
         $delayMs    = 1000; // initial backoff: 1 second (in ms)
         $waitedMs   = 0;    // cumulative wait across retries
-        $body       = $this->buildVerifyBody($token, $scopeUsed, $endpoint, $method, $consentFirst);
+        $body       = $this->buildVerifyBody(
+            $token,
+            $scopeUsed,
+            $endpoint,
+            $method,
+            $consentFirst,
+            $actionAttestationId,
+            $requestDigest,
+            $actionSummary
+        );
 
         for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
             try {
@@ -254,6 +369,20 @@ class IntrospectionClient
                     userIntent: isset($data['user_intent']) && is_string($data['user_intent'])
                         ? $data['user_intent']
                         : null,
+                    // SDK 1.11 confirm-each-time: present only when THIS call
+                    // was accepted because the hosted service consumed a human
+                    // confirmation for exactly this action. Strict: a string
+                    // session id AND consumed === true, or it is dropped -
+                    // an app that treats this as its own transaction step-up
+                    // must never see a half-formed block.
+                    actionConfirmation: is_array($data['action_confirmation'] ?? null)
+                        && is_string($data['action_confirmation']['action_session_id'] ?? null)
+                        && ($data['action_confirmation']['consumed'] ?? null) === true
+                        ? [
+                            'action_session_id' => $data['action_confirmation']['action_session_id'],
+                            'consumed' => true,
+                        ]
+                        : null,
                 );
             } catch (AgentAdmitException $e) {
                 throw $e;
@@ -281,13 +410,20 @@ class IntrospectionClient
      *    stripped client-side (query strings can carry PII), then truncated
      *    to {@see MAX_ENDPOINT_LENGTH} chars.
      *  - method:     uppercased, truncated to {@see MAX_METHOD_LENGTH} chars.
+     *
+     * SDK 1.11 adds the confirm-each-time trio on the same terms: trimmed,
+     * capped ({@see MAX_ATTESTATION_LENGTH}, {@see MAX_DIGEST_LENGTH},
+     * {@see MAX_SUMMARY_LENGTH}), and omitted entirely when empty.
      */
     private function buildVerifyBody(
         string $token,
         ?string $scopeUsed,
         ?string $endpoint,
         ?string $method,
-        bool $consentFirst = false
+        bool $consentFirst = false,
+        ?string $actionAttestationId = null,
+        ?string $requestDigest = null,
+        ?string $actionSummary = null
     ): array {
         $body = ['token' => $token];
 
@@ -315,6 +451,22 @@ class IntrospectionClient
 
         if ($consentFirst) {
             $body['consent_first'] = true;
+        }
+
+        // SDK 1.11 confirm-each-time: each field is trimmed, capped at the
+        // hosted BodySchema limit, and omitted entirely when empty.
+        foreach ([
+            'action_attestation_id' => [$actionAttestationId, self::MAX_ATTESTATION_LENGTH],
+            'request_digest'        => [$requestDigest, self::MAX_DIGEST_LENGTH],
+            'action_summary'        => [$actionSummary, self::MAX_SUMMARY_LENGTH],
+        ] as $key => [$value, $max]) {
+            if (!is_string($value)) {
+                continue;
+            }
+            $value = substr(trim($value), 0, $max);
+            if ($value !== '') {
+                $body[$key] = $value;
+            }
         }
 
         return $body;
