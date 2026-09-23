@@ -23,6 +23,7 @@ namespace {
 
 namespace AgentAdmit\Tests {
 
+    use AgentAdmit\ConfirmationDeclinedException;
     use AgentAdmit\ConfirmationRequiredException;
     use AgentAdmit\IntrospectionClient;
     use AgentAdmit\Middleware\RequireScope;
@@ -123,6 +124,89 @@ namespace AgentAdmit\Tests {
                 $this->assertNotInstanceOf(ConfirmationRequiredException::class, $e);
                 $this->assertArrayNotHasKey('confirmation', $e->getDenialBody());
             }
+        }
+
+        private function declined(): array
+        {
+            return [
+                'action_session_id' => 'asess_abc',
+                'declined_at' => '2026-09-22T21:35:42Z',
+                'hold_until' => '2026-09-22T21:50:42Z',
+                'scope' => 'write:payments',
+                'method' => 'POST',
+                'endpoint' => '/api/payments',
+                'request_digest' => 'sha256:deadbeef',
+                'summary' => 'Pay Alex $50',
+            ];
+        }
+
+        public function testTypedConfirmationDeclinedDenialCarriesOnlyTheContract(): void
+        {
+            Http::fake(['*' => Http::response($this->active([
+                'error' => 'confirmation_declined',
+                'error_description' => 'The user declined this action on the hosted confirmation page. Do not retry it unless the user asks you to; no new confirmation can be staged for this action until 2026-09-22T21:50:42Z.',
+                'declined' => $this->declined(),
+                'attestation_status' => 'declined',
+                'attestation_description' => 'The user declined this action.',
+                'renewal' => 'Only the user can lift a decline.',
+                'user_secret' => 'must-not-leak',
+            ]), 200)]);
+
+            try {
+                $this->client()->verify('ag_at_dummy', 'write:payments');
+                $this->fail('confirmation_declined must deny');
+            } catch (ConfirmationDeclinedException $e) {
+                $this->assertInstanceOf(VerificationDeniedException::class, $e);
+                $this->assertNotInstanceOf(ConfirmationRequiredException::class, $e);
+                $this->assertSame('confirmation_declined', $e->getErrorCode());
+                $this->assertSame('asess_abc', $e->getActionSessionId());
+                $this->assertSame('2026-09-22T21:50:42Z', $e->getHoldUntil());
+                $this->assertSame('declined', $e->getAttestationStatus());
+                $body = $e->getDenialBody();
+                $this->assertSame($this->declined(), $body['declined']);
+                $this->assertStringContainsString('Do not retry', $body['error_description']);
+                $this->assertSame('Only the user can lift a decline.', $body['renewal']);
+                $this->assertArrayNotHasKey('confirmation', $body);
+                $this->assertArrayNotHasKey('user_secret', $body);
+            }
+        }
+
+        public function testDeclinedWithoutDescriptionUsesTheDefault(): void
+        {
+            Http::fake(['*' => Http::response($this->active([
+                'error' => 'confirmation_declined',
+                'declined' => $this->declined(),
+            ]), 200)]);
+            try {
+                $this->client()->verify('ag_at_dummy', 'write:payments');
+                $this->fail('must deny');
+            } catch (ConfirmationDeclinedException $e) {
+                $this->assertStringContainsString('unless the user asks', $e->getDenialBody()['error_description']);
+                $this->assertNull($e->getAttestationStatus());
+            }
+        }
+
+        public function testMalformedDeclineStaysAPlainFailClosedDenial(): void
+        {
+            Http::fake(['*' => Http::response($this->active([
+                'error' => 'confirmation_declined',
+                'declined' => ['action_session_id' => 'asess_abc', 'hold_until' => 7],
+            ]), 200)]);
+            try {
+                $this->client()->verify('ag_at_dummy', 'write:payments');
+                $this->fail('malformed decline must still deny');
+            } catch (VerificationDeniedException $e) {
+                $this->assertNotInstanceOf(ConfirmationDeclinedException::class, $e);
+                $this->assertSame('confirmation_declined', $e->getDenialBody()['error']);
+                $this->assertArrayNotHasKey('declined', $e->getDenialBody());
+            }
+
+            $this->assertNull(ConfirmationDeclinedException::parseDeclined('nope'));
+            $this->assertNull(ConfirmationDeclinedException::parseDeclined(['action_session_id' => 'a', 'declined_at' => 'd', 'scope' => 's']));
+            $this->assertSame(
+                ['action_session_id' => 'a', 'declined_at' => 'd', 'hold_until' => 'h', 'scope' => 's', 'method' => null, 'endpoint' => null, 'request_digest' => null, 'summary' => null],
+                ConfirmationDeclinedException::parseDeclined(['action_session_id' => 'a', 'declined_at' => 'd', 'hold_until' => 'h', 'scope' => 's', 'method' => 4])
+            );
         }
 
         public function testVerifyForwardsAndCapsConfirmEachTimeFields(): void

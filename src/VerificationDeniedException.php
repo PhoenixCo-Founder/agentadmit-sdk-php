@@ -153,6 +153,47 @@ class VerificationDeniedException extends AgentAdmitException
             return new ConfirmationRequiredException($description, $body, $confirmation, $attestationStatus);
         }
 
+        if ($errorCode === ConfirmationDeclinedException::ERROR_CONFIRMATION_DECLINED) {
+            // SDK 1.12 confirm-each-time: the user declined exactly this
+            // action on the hosted page and the hold still runs. Relay the
+            // decline so the agent can tell the user instead of nagging with
+            // a link; nothing else from the wire rides along.
+            $description = is_string($data['error_description'] ?? null)
+                ? $data['error_description']
+                : ConfirmationDeclinedException::DEFAULT_DESCRIPTION;
+
+            $body = [
+                'error' => ConfirmationDeclinedException::ERROR_CONFIRMATION_DECLINED,
+                'error_description' => $description,
+            ];
+
+            $declined = ConfirmationDeclinedException::parseDeclined($data['declined'] ?? null);
+            if ($declined !== null) {
+                $body['declined'] = $declined;
+            }
+
+            $attestationStatus = is_string($data['attestation_status'] ?? null)
+                ? $data['attestation_status']
+                : null;
+            if ($attestationStatus !== null) {
+                $body['attestation_status'] = $attestationStatus;
+            }
+            if (is_string($data['attestation_description'] ?? null)) {
+                $body['attestation_description'] = $data['attestation_description'];
+            }
+            if (is_string($data['renewal'] ?? null)) {
+                $body['renewal'] = $data['renewal'];
+            }
+
+            // A malformed (or absent) decline block degrades to a plain
+            // fail-closed refusal - 403, no declined block, no typed exception.
+            if ($declined === null) {
+                return new self($description, ConfirmationDeclinedException::ERROR_CONFIRMATION_DECLINED, $body);
+            }
+
+            return new ConfirmationDeclinedException($description, $body, $declined, $attestationStatus);
+        }
+
         // Unknown refusal class on an active response: fail closed with the
         // code preserved and a generic description (the v1.5.1 lesson - never
         // let an unrecognized hosted verdict become an allow).
