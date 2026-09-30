@@ -209,6 +209,14 @@ Route::middleware('agentadmit.scope:read:orders')->get('/orders', ...);
 $result = $introspectionClient->verify($token, 'read:orders', $request->getPathInfo(), $request->method());
 ```
 
+The verify result also exposes the hosted audit row id when the service returns it:
+
+```php
+$result->auditRowId; // e.g. "019..."
+```
+
+If the hosted service returns a replay diagnostic, the SDK surfaces it as `$result->consumedReceipt` only when it is a strict `already_consumed` receipt. This is a diagnostic record for review and debugging; it is not authorization to run the downstream action again.
+
 Honesty rules:
 
 - **Omitted means omitted.** A field that is not known is left out of the request entirely (never `null` or an empty string), and the hosted audit row honestly records it as "not reported" rather than inventing a value.
@@ -226,6 +234,34 @@ As of 1.10.0 the SDK also treats an `active: true` introspection response that c
 - Any refusal code this SDK version does not recognize → `403 {error: <code>, error_description: "Call refused by the authorization service."}` — unknown hosted verdicts never become an allow.
 
 `IntrospectionClient::verify()` surfaces these as `VerificationDeniedException` (a 403 `AgentAdmitException` subclass); `getDenialBody()` is the exact JSON body the middlewares return.
+
+### Outcome reporting
+
+After your app handles a verified request, you can append the observed downstream outcome to the AgentAdmit audit trail:
+
+```php
+$client->reportOutcome(
+    $result->auditRowId,
+    'executed', // executed, failed, or unknown
+    '2xx',      // optional status class: 1xx, 2xx, 3xx, 4xx, 5xx, or null
+);
+```
+
+This posts to `POST {api_url}/api/v1/audit/{row}/outcome` with:
+
+```json
+{"outcome":"executed","status_class":"2xx"}
+```
+
+`executed` means your app observed the downstream operation complete. `failed` means your app observed a downstream failure. `unknown` is never inferred by the middleware; use it only in explicit custom code when your app cannot tell whether the operation completed.
+
+Laravel middleware can report automatically after the route returns:
+
+```env
+AGENTADMIT_OUTCOME_REPORTING=true
+```
+
+With that opt-in enabled, `agentadmit.scope`, `agentadmit.scope_if_agent`, `agentadmit.presence`, and the external-agent path of `agentadmit.caller_consent` report only after `$next($request)` returns a Symfony/Laravel response and the verify result contains `audit_row_id`. HTTP status `<400` maps to `executed`; status `>=400` maps to `failed`; `status_class` is reported as `1xx` through `5xx`. Aborted requests, exceptions before a response, missing responses, and older verify responses without `audit_row_id` are not reported. If the outcome report itself fails, the SDK logs a warning and returns your app's original response unchanged.
 
 ## Confirm Each Time (Exercise-Time Human Confirmation)
 

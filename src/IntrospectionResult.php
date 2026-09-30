@@ -43,6 +43,19 @@ class IntrospectionResult
          * non-null value as that confirmation instead of asking twice.
          */
         public readonly ?array $actionConfirmation = null,
+        /**
+         * The hosted audit row written for this successful verify call. Use it
+         * when reporting the downstream outcome through
+         * IntrospectionClient::reportOutcome(). Null on older servers that do
+         * not return the row id.
+         */
+        public readonly ?string $auditRowId = null,
+        /**
+         * Replay diagnostic for an already-consumed action. This is a
+         * review/debug record only and must never be treated as authorization
+         * to run the downstream action again.
+         */
+        public readonly ?array $consumedReceipt = null,
     ) {}
 
     public function hasScope(string $scope): bool

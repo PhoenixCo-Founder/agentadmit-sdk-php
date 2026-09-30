@@ -73,6 +73,7 @@ use Symfony\Component\HttpFoundation\Response;
 class CallerConsent
 {
     use ConfirmsAction;
+    use ReportsOutcome;
 
     private IntrospectionClient $introspection;
     private ConsentClient $consent;
@@ -240,19 +241,10 @@ class CallerConsent
             ], 403);
         }
 
-        $request->attributes->set('agentadmit.auth_type', 'agent');
-        $request->attributes->set('agentadmit.user_id', $result->userId);
-        $request->attributes->set('agentadmit.scopes', $result->scopes);
-        $request->attributes->set('agentadmit.connection_id', $result->connectionId);
-        $request->attributes->set('agentadmit.agent_label', $result->agentLabel);
+        $this->attachAgentAdmitAttributes($request, $result);
         $request->attributes->set('agentadmit.consent', $verdict);
-        // Confirm-each-time (1.11): only when a fresh human confirmation was
-        // consumed for exactly this action.
-        if ($result->actionConfirmation !== null) {
-            $request->attributes->set('agentadmit.action_confirmation', $result->actionConfirmation);
-        }
 
-        return $next($request);
+        return $this->withOutcomeReport($request, $next, $this->introspection, $result);
     }
 
     /**

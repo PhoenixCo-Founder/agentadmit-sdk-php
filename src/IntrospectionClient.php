@@ -41,6 +41,11 @@ class IntrospectionClient
     public const DEFAULT_API_URL    = 'https://api.agentadmit.com';
     public const DEFAULT_VERIFY_URL = 'https://api.agentadmit.com/api/v1/verify';
 
+    /** Allowed post-execution outcomes reported for a verify audit row. */
+    public const OUTCOME_EXECUTED = 'executed';
+    public const OUTCOME_FAILED   = 'failed';
+    public const OUTCOME_UNKNOWN  = 'unknown';
+
     /** Hosted cap on the reported endpoint path (chars). */
     public const MAX_ENDPOINT_LENGTH = 500;
 
@@ -96,6 +101,10 @@ class IntrospectionClient
         // M4: Require HTTPS on configurable URLs (HTTP allowed only on loopback).
         AgentAdmitException::assertHttpsUrl($verifyUrl, 'verify_url');
         $this->config['verify_url'] = $verifyUrl;
+
+        $apiUrl = $this->config['api_url'] ?? self::DEFAULT_API_URL;
+        AgentAdmitException::assertHttpsUrl($apiUrl, 'api_url');
+        $this->config['api_url'] = rtrim($apiUrl, '/');
     }
 
     /**
@@ -105,6 +114,12 @@ class IntrospectionClient
     public function getVerifyUrl(): string
     {
         return $this->config['verify_url'];
+    }
+
+    /** The hosted API origin this client uses for non-verify endpoints. */
+    public function getApiUrl(): string
+    {
+        return $this->config['api_url'];
     }
 
     /**
@@ -383,6 +398,13 @@ class IntrospectionClient
                             'consumed' => true,
                         ]
                         : null,
+                    auditRowId: isset($data['audit_row_id']) && is_string($data['audit_row_id']) && $data['audit_row_id'] !== ''
+                        ? $data['audit_row_id']
+                        : null,
+                    consumedReceipt: is_array($data['consumed_receipt'] ?? null)
+                        && ($data['consumed_receipt']['already_consumed'] ?? null) === true
+                        ? $data['consumed_receipt']
+                        : null,
                 );
             } catch (AgentAdmitException $e) {
                 throw $e;
@@ -394,6 +416,58 @@ class IntrospectionClient
 
         // Should never be reached
         throw new AgentAdmitException('Unexpected exit from retry loop', 500);
+    }
+
+    /**
+     * Report the app's observed downstream outcome for a successful verify
+     * audit row. This appends an outcome row in AgentAdmit's audit log; it
+     * never changes the original authorization decision.
+     *
+     * @param string      $auditRowId  audit_row_id from IntrospectionResult
+     * @param string      $outcome     executed, failed, or unknown
+     * @param string|null $statusClass Optional HTTP status class: 1xx..5xx or null
+     * @return array The hosted response body
+     * @throws AgentAdmitException
+     */
+    public function reportOutcome(string $auditRowId, string $outcome, ?string $statusClass = null): array
+    {
+        $auditRowId = trim($auditRowId);
+        if ($auditRowId === '') {
+            throw new AgentAdmitException('auditRowId is required', 400);
+        }
+
+        if (!in_array($outcome, [self::OUTCOME_EXECUTED, self::OUTCOME_FAILED, self::OUTCOME_UNKNOWN], true)) {
+            throw new AgentAdmitException('outcome must be executed, failed, or unknown', 400);
+        }
+
+        if ($statusClass !== null && preg_match('/^[1-5]xx$/', $statusClass) !== 1) {
+            throw new AgentAdmitException('statusClass must be 1xx, 2xx, 3xx, 4xx, 5xx, or null', 400);
+        }
+
+        $url = $this->config['api_url'] . '/api/v1/audit/' . rawurlencode($auditRowId) . '/outcome';
+
+        try {
+            $response = Http::timeout(5)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . ($this->config['api_key'] ?? ''),
+                    'Content-Type' => 'application/json',
+                ])
+                ->post($url, [
+                    'outcome' => $outcome,
+                    'status_class' => $statusClass,
+                ]);
+        } catch (\Exception $e) {
+            Log::warning('AgentAdmit outcome report failed: ' . $e->getMessage());
+            throw new AgentAdmitException('Outcome report failed: ' . $e->getMessage(), 502);
+        }
+
+        $status = $response->status();
+        if ($status < 200 || $status > 299) {
+            throw new AgentAdmitException('Outcome service returned ' . $status, 502);
+        }
+
+        $data = $response->json();
+        return is_array($data) ? $data : [];
     }
 
     // -------------------------------------------------------------------------
