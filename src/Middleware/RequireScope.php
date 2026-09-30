@@ -31,6 +31,7 @@ use Symfony\Component\HttpFoundation\Response;
 class RequireScope
 {
     use ConfirmsAction;
+    use ReportsOutcome;
 
     private IntrospectionClient $client;
 
@@ -81,20 +82,9 @@ class RequireScope
                 ], 403);
             }
 
-            // Set request attributes for downstream use
-            $request->attributes->set('agentadmit.auth_type', 'agent');
-            $request->attributes->set('agentadmit.user_id', $result->userId);
-            $request->attributes->set('agentadmit.scopes', $result->scopes);
-            $request->attributes->set('agentadmit.connection_id', $result->connectionId);
-            $request->attributes->set('agentadmit.agent_label', $result->agentLabel);
-            // Confirm-each-time (1.11): only set when the hosted service
-            // accepted this call by consuming a fresh human confirmation for
-            // exactly this action.
-            if ($result->actionConfirmation !== null) {
-                $request->attributes->set('agentadmit.action_confirmation', $result->actionConfirmation);
-            }
+            $this->attachAgentAdmitAttributes($request, $result);
 
-            return $next($request);
+            return $this->withOutcomeReport($request, $next, $this->client, $result);
 
         } catch (VerificationDeniedException $e) {
             // SDK 1.10: the hosted service refused this otherwise-active call

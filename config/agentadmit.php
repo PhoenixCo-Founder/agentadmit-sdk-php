@@ -38,6 +38,15 @@ return [
         'summaries' => [],
     ],
 
+    // Optional post-handler outcome reporting. When enabled, the Laravel
+    // AgentAdmit middlewares append an outcome row only after your route
+    // returns a response. HTTP <400 maps to executed; HTTP >=400 maps to
+    // failed. Aborted requests and missing responses are not reported, and
+    // reporting failures are logged without replacing your app response.
+    'outcome_reporting' => [
+        'enabled' => (bool) env('AGENTADMIT_OUTCOME_REPORTING', false),
+    ],
+
     // Webhook signing secret (whsec_…) — shown once when you configure the
     // alert webhook URL in the dashboard. Used to verify inbound alert
     // webhooks via AgentAdmit\Webhook::verifySignature().
