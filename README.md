@@ -9,8 +9,10 @@ User-mediated AI agent authorization. Plug-and-play for any Laravel app.
 
 ## Quick Start
 
+Requires PHP 8.2 or newer (PHP 8.1 reached end of security support on December 31, 2025 and receives no fixes; keep your runtime on a currently patched 8.2+ release).
+
 ```bash
-composer require agentadmit/laravel
+composer require agentadmit/agentadmit-sdk
 php artisan vendor:publish --tag=agentadmit-config
 ```
 
