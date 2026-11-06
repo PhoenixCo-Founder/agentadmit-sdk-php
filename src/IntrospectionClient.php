@@ -405,6 +405,13 @@ class IntrospectionClient
                         && ($data['consumed_receipt']['already_consumed'] ?? null) === true
                         ? $data['consumed_receipt']
                         : null,
+                    // SDK 1.14 agent designation: what the user said the
+                    // connection is for, and what the agent reported about
+                    // itself. Review-time records, never an enforcement
+                    // input, so a malformed block is dropped rather than
+                    // failing the verify.
+                    designatedAgent: self::parseDesignatedAgent($data['designated_agent'] ?? null),
+                    agentReported: self::parseAgentReported($data['agent_reported'] ?? null),
                 );
             } catch (AgentAdmitException $e) {
                 throw $e;
@@ -613,5 +620,67 @@ class IntrospectionClient
             return null;
         }
         return is_numeric($val) ? (int) $val : null;
+    }
+
+    /**
+     * The user's agent designation from a verify response, or null when the
+     * block is absent, null, or not a user-declared designation. Strict: a
+     * non-empty string name and source 'user_declared', or the whole block is
+     * dropped. A malformed model is dropped and the app is kept. This is what
+     * the user said on the consent page, not a verified identity.
+     *
+     * @return array{agent_id: ?string, name: string, source: string, model: ?array{model_id: ?string, name: string}}|null
+     */
+    public static function parseDesignatedAgent(mixed $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+        $name = $raw['name'] ?? null;
+        if (!is_string($name) || $name === '' || ($raw['source'] ?? null) !== 'user_declared') {
+            return null;
+        }
+        $m = $raw['model'] ?? null;
+        $model = is_array($m) && is_string($m['name'] ?? null) && $m['name'] !== ''
+            ? [
+                'model_id' => is_string($m['model_id'] ?? null) ? $m['model_id'] : null,
+                'name' => $m['name'],
+            ]
+            : null;
+
+        return [
+            'agent_id' => is_string($raw['agent_id'] ?? null) ? $raw['agent_id'] : null,
+            'name' => $name,
+            'source' => 'user_declared',
+            'model' => $model,
+        ];
+    }
+
+    /**
+     * What the agent reported about itself at token exchange, or null when
+     * the block carries neither a platform nor a model id. Unverified.
+     *
+     * @return array{platform: ?string, model: ?array{id: string, version: ?string}}|null
+     */
+    public static function parseAgentReported(mixed $raw): ?array
+    {
+        if (!is_array($raw)) {
+            return null;
+        }
+        $platform = is_string($raw['platform'] ?? null) && $raw['platform'] !== ''
+            ? $raw['platform']
+            : null;
+        $m = $raw['model'] ?? null;
+        $model = is_array($m) && is_string($m['id'] ?? null) && $m['id'] !== ''
+            ? [
+                'id' => $m['id'],
+                'version' => is_string($m['version'] ?? null) ? $m['version'] : null,
+            ]
+            : null;
+        if ($platform === null && $model === null) {
+            return null;
+        }
+
+        return ['platform' => $platform, 'model' => $model];
     }
 }
