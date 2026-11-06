@@ -56,6 +56,29 @@ class IntrospectionResult
          * to run the downstream action again.
          */
         public readonly ?array $consumedReceipt = null,
+        /**
+         * Agent designation (1.14): what the USER said on AgentAdmit's
+         * consent page about which agent app the connection is for and,
+         * optionally, which AI model family it mainly uses:
+         * ['agent_id' => ?string, 'name' => string,
+         *  'source' => 'user_declared',
+         *  'model' => ['model_id' => ?string, 'name' => string] | null].
+         * It is the user's statement, recorded with the grant; it is not a
+         * verified identity of the agent. 'agent_id' / 'model_id' are null
+         * when the user typed a name that is not on the app's list. Null
+         * when the connection carries none (or on older servers). Review-time
+         * record only, never an enforcement input.
+         */
+        public readonly ?array $designatedAgent = null,
+        /**
+         * What the AGENT reported about itself when it redeemed the
+         * connection token:
+         * ['platform' => ?string,
+         *  'model' => ['id' => string, 'version' => ?string] | null].
+         * Unverified. Null when the agent reported nothing. Review-time
+         * record only, never an enforcement input.
+         */
+        public readonly ?array $agentReported = null,
     ) {}
 
     public function hasScope(string $scope): bool

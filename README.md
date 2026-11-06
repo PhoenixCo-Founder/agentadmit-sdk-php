@@ -176,6 +176,29 @@ $result->userIntent; // 'get my usual Tuesday order', or null when none was decl
 
 `userIntent` is `null` for connections minted without one and on older servers that omit the field. Do not branch authorization on it  -  like the purpose, `/verify` never gates on it, and neither should your app.
 
+## Agent Designation
+
+On AgentAdmit's consent page the user says which agent app a connection is for and, optionally, which AI model family it mainly uses. That is the user's statement, recorded with the grant; it is not a verified identity of the agent. Separately, an agent may report its own platform and model when it redeems the connection token; that is unverified too.
+
+The verify response reports both on every introspection. The SDK surfaces them on the result as `designatedAgent` and `agentReported` (`null` when the connection carries none), and the middleware sets the request attributes `agentadmit.designated_agent` and `agentadmit.agent_reported` when they are present:
+
+```php
+$result = $introspectionClient->verify($token);
+
+// ['agent_id' => ..., 'name' => ..., 'source' => 'user_declared',
+//  'model' => ['model_id' => ..., 'name' => ...] or null]
+$named = $result->designatedAgent;
+// ['platform' => ..., 'model' => ['id' => ..., 'version' => ...] or null]
+$reported = $result->agentReported;
+
+// Inside a route behind the middleware:
+$named = $request->attributes->get('agentadmit.designated_agent');
+```
+
+Use `designatedAgent['name']` when you tell a user which of their connections did something: it is the name they chose. `agent_id` and `model['model_id']` are the ids of your list entries, or `null` when the user typed a name that is not on your list.
+
+Do not branch authorization on either field. They are records for people reviewing a connection, not a gate. Scope checks, connection status, and consent verdicts remain the only decision inputs. To act on a designation, use the hosted revoke API (`designated_agent_id`, `designated_model_id`) or your list's block setting in the dashboard.
+
 ## App-Attested Presence
 
 If your app gates token minting behind its own embedded passkey/WebAuthn ceremony, AgentAdmit never witnesses that ceremony (it is origin-bound), so by default the hosted service reports `presence.verified: false` for those connections. Attest the ceremony fact at issuance to close that gap  -  AFTER verifying and consuming your own fresh, purpose-bound attestation:

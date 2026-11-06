@@ -32,6 +32,12 @@ trait ReportsOutcome
         if ($result->actionConfirmation !== null) {
             $request->attributes->set('agentadmit.action_confirmation', $result->actionConfirmation);
         }
+        if ($result->designatedAgent !== null) {
+            $request->attributes->set('agentadmit.designated_agent', $result->designatedAgent);
+        }
+        if ($result->agentReported !== null) {
+            $request->attributes->set('agentadmit.agent_reported', $result->agentReported);
+        }
     }
 
     protected function withOutcomeReport(Request $request, \Closure $next, IntrospectionClient $client, IntrospectionResult $result): Response
