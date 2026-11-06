@@ -154,11 +154,26 @@ class TokensClient
      * @param string      $connectionToken The ag_ct_… connection token
      * @param string|null $agentLabel      Human-readable agent name
      * @param string|null $agentId         Agent identifier
+     * @param string|null $agentPlatform   The agent app or runtime the agent
+     *                                     says it runs in (reported by the
+     *                                     agent, unverified)
+     * @param array|null  $agentModel      The AI model the agent says it runs
+     *                                     on: ['id' => string, 'version' =>
+     *                                     string (optional)] (reported by the
+     *                                     agent, unverified). The hosted
+     *                                     service records both and never lets
+     *                                     them decide the outcome of the
+     *                                     exchange.
      * @return array The exchange response — ['access_token' => 'ag_at_…', …]
      * @throws AgentAdmitException
      */
-    public function exchange(string $connectionToken, ?string $agentLabel = null, ?string $agentId = null): array
-    {
+    public function exchange(
+        string $connectionToken,
+        ?string $agentLabel = null,
+        ?string $agentId = null,
+        ?string $agentPlatform = null,
+        ?array $agentModel = null,
+    ): array {
         $url = rtrim($this->config['api_url'] ?? 'https://api.agentadmit.com', '/') . '/api/v1/exchange';
 
         $body = ['token' => $connectionToken];
@@ -167,6 +182,12 @@ class TokensClient
         }
         if ($agentId !== null) {
             $body['agent_id'] = $agentId;
+        }
+        if ($agentPlatform !== null) {
+            $body['agent_platform'] = $agentPlatform;
+        }
+        if ($agentModel !== null) {
+            $body['agent_model'] = $agentModel;
         }
 
         return $this->post($url, $body, 'exchange', authenticated: false);
