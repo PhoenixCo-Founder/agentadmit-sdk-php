@@ -214,6 +214,102 @@ class TokensClient
         return $this->post($url, $body, 'revoke', authenticated: true);
     }
 
+    /** Shortest action session id the owner-link call accepts (characters). */
+    public const OWNER_LINK_MIN_SESSION_ID_LENGTH = 20;
+
+    /** Longest app user id the owner-link call accepts (characters). */
+    public const OWNER_LINK_MAX_USER_ID_LENGTH = 255;
+
+    /**
+     * SDK 1.15: open a pending confirm-each-time request for the app's own
+     * signed-in user. Calls POST /api/v1/action-sessions/{id}/owner-link with
+     * the app's API key and body {"app_user_id": $appUserId}.
+     *
+     * Use it when a confirmation_required refusal says
+     * `enrollment_required: true` ({@see ConfirmationRequiredException::isEnrollmentRequired()}):
+     * the user has no passkey on file for the app yet, so the link the agent
+     * holds cannot be used. The user creates a passkey and confirms on the page
+     * the returned link opens; on a computer that page can show a QR code to
+     * continue on the user's phone.
+     *
+     * Two rules:
+     *  - Call it only from a route your signed-in human uses, passing that
+     *    user's own id. The hosted service answers 404 when the session
+     *    belongs to a different user than the one named.
+     *  - Do not return $ownerSessionUrl to an agent. Send it to the signed-in
+     *    user's browser only.
+     *
+     * It is not registered on any middleware or route. This call logs the path
+     * and the status only, never the response. Calling it again for the same
+     * session is safe: a new link replaces the previous one.
+     *
+     * @param string $actionSessionId The asess_ id from the refusal (at least 20 characters)
+     * @param string $appUserId       Your signed-in user's id (1 to 255 characters)
+     * @throws \InvalidArgumentException before any request when an argument is invalid
+     * @throws AgentAdmitException on a hosted HTTP error (status and hosted `error` code:
+     *         401 invalid_api_key, 403 api_key_not_app_linked, 404 not_found,
+     *         409 already_consumed / already_verified, 410 session_expired, 429, 5xx;
+     *         not retried), or with status 502 on a network failure or a malformed 2xx body
+     */
+    public function createOwnerLink(string $actionSessionId, string $appUserId): OwnerLink
+    {
+        if (!str_starts_with($actionSessionId, 'asess_')
+            || strlen($actionSessionId) < self::OWNER_LINK_MIN_SESSION_ID_LENGTH) {
+            throw new \InvalidArgumentException(
+                'actionSessionId must be an asess_ id of at least '
+                . self::OWNER_LINK_MIN_SESSION_ID_LENGTH . ' characters'
+            );
+        }
+        if ($appUserId === '' || mb_strlen($appUserId) > self::OWNER_LINK_MAX_USER_ID_LENGTH) {
+            throw new \InvalidArgumentException(
+                'appUserId must be 1 to ' . self::OWNER_LINK_MAX_USER_ID_LENGTH . ' characters'
+            );
+        }
+
+        $path = '/api/v1/action-sessions/' . rawurlencode($actionSessionId) . '/owner-link';
+        $url = rtrim($this->config['api_url'] ?? 'https://api.agentadmit.com', '/') . $path;
+        $headers = [
+            'Content-Type' => 'application/json',
+            'Authorization' => 'Bearer ' . ($this->config['api_key'] ?? ''),
+            'X-App-Id' => $this->config['app_id'] ?? '',
+        ];
+
+        try {
+            $response = Http::timeout(10)->withHeaders($headers)->post($url, ['app_user_id' => $appUserId]);
+        } catch (\Exception $e) {
+            Log::error("AgentAdmit createOwnerLink POST {$path} failed");
+            throw new AgentAdmitException('createOwnerLink failed', 502);
+        }
+
+        $status = $response->status();
+        if ($status >= 400) {
+            Log::error("AgentAdmit createOwnerLink POST {$path} returned {$status}");
+            $data = json_decode($response->body(), true);
+            $code = is_array($data) && is_string($data['error'] ?? null) ? $data['error'] : null;
+            throw new AgentAdmitException(
+                'createOwnerLink failed: ' . $status . ($code !== null ? " {$code}" : ''),
+                $status,
+                $code
+            );
+        }
+
+        $data = json_decode($response->body(), true);
+        if (!is_array($data)
+            || !is_string($data['owner_session_url'] ?? null)
+            || !is_bool($data['enrollment_required'] ?? null)) {
+            Log::error("AgentAdmit createOwnerLink POST {$path} returned {$status} with a malformed body");
+            throw new AgentAdmitException('createOwnerLink returned a malformed response', 502);
+        }
+
+        return new OwnerLink(
+            actionSessionId: is_string($data['action_session_id'] ?? null) ? $data['action_session_id'] : null,
+            ownerSessionUrl: $data['owner_session_url'],
+            enrollmentRequired: $data['enrollment_required'],
+            enrollmentReason: is_string($data['enrollment_reason'] ?? null) ? $data['enrollment_reason'] : null,
+            expiresAt: is_string($data['expires_at'] ?? null) ? $data['expires_at'] : null,
+        );
+    }
+
     private function post(string $url, array $body, string $op, bool $authenticated): array
     {
         $headers = ['Content-Type' => 'application/json'];
