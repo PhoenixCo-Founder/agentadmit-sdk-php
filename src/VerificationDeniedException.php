@@ -127,6 +127,12 @@ class VerificationDeniedException extends AgentAdmitException
             $confirmation = ConfirmationRequiredException::parseConfirmation($data['confirmation'] ?? null);
             if ($confirmation !== null) {
                 $body['confirmation'] = $confirmation;
+                // 1.15: the user has no passkey on file for the app, so the
+                // link alone cannot be used; send the user into the app.
+                if (($confirmation['enrollment_required'] ?? null) === true) {
+                    $description = ConfirmationRequiredException::ENROLLMENT_REQUIRED_DESCRIPTION;
+                    $body['error_description'] = $description;
+                }
             }
 
             $attestationStatus = is_string($data['attestation_status'] ?? null)

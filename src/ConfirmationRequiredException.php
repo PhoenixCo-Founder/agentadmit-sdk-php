@@ -27,6 +27,17 @@ class ConfirmationRequiredException extends VerificationDeniedException
         . 'Give the confirmation link to the user, then retry with the '
         . 'X-AgentAdmit-Action-Attestation header.';
 
+    /**
+     * SDK 1.15: the 403 error_description when the block states
+     * `enrollment_required: true`. It replaces the hosted description and the
+     * default: this user has no passkey on file for the app yet, so the link
+     * alone cannot be used.
+     */
+    public const ENROLLMENT_REQUIRED_DESCRIPTION = 'This action requires a fresh human confirmation, '
+        . 'and this user has no passkey on file for the app yet, so the confirmation link alone '
+        . 'cannot be used. Ask the user to open the request from inside the app. After they '
+        . 'confirm, retry with the X-AgentAdmit-Action-Attestation header.';
+
     /** @var array The strictly typed hosted confirmation block. */
     private array $confirmation;
 
@@ -41,9 +52,11 @@ class ConfirmationRequiredException extends VerificationDeniedException
     }
 
     /**
-     * The staged ceremony: {action_session_id, action_session_url, expires_at,
-     * scope, method, endpoint, request_digest, summary}. The last four are
-     * nullable strings; the first four are always strings.
+     * The staged ceremony: {action_session_id, action_session_url,
+     * enrollment_required?, expires_at, scope, method, endpoint, request_digest,
+     * summary}. The last four are nullable strings; the four identity fields are
+     * always strings; enrollment_required (1.15) is present only when the hosted
+     * service stated it as a boolean.
      */
     public function getConfirmation(): array
     {
@@ -60,6 +73,17 @@ class ConfirmationRequiredException extends VerificationDeniedException
     public function getActionSessionId(): string
     {
         return $this->confirmation['action_session_id'];
+    }
+
+    /**
+     * SDK 1.15: true when this user has no passkey on file for the app yet, so
+     * the link alone cannot be used and the app has to open the request for
+     * its signed-in user ({@see TokensClient::createOwnerLink()}); false when a
+     * passkey is on file; null when the hosted service did not state it.
+     */
+    public function isEnrollmentRequired(): ?bool
+    {
+        return $this->confirmation['enrollment_required'] ?? null;
     }
 
     /**
@@ -97,9 +121,17 @@ class ConfirmationRequiredException extends VerificationDeniedException
 
         $nullable = static fn ($value): ?string => is_string($value) ? $value : null;
 
-        return [
+        $parsed = [
             'action_session_id'  => $raw['action_session_id'],
             'action_session_url' => $raw['action_session_url'],
+        ];
+        // 1.15: kept only when the hosted service stated it as a boolean;
+        // null, strings, numbers and arrays read as not stated (never coerced).
+        if (is_bool($raw['enrollment_required'] ?? null)) {
+            $parsed['enrollment_required'] = $raw['enrollment_required'];
+        }
+
+        return $parsed + [
             'expires_at'         => $raw['expires_at'],
             'scope'              => $raw['scope'],
             'method'             => $nullable($raw['method'] ?? null),

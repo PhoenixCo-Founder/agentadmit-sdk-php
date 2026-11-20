@@ -345,6 +345,69 @@ Notes:
 - **The user can decline.** If the user taps Decline on the hosted page, the hosted service answers the agent's retry with `confirmation_declined` and holds that answer until `declined.hold_until`; no new ceremony is staged and the user is not notified again. Middlewares return 403 with the strictly typed `declined` block (`action_session_id`, `declined_at`, `hold_until`, `scope`, plus nullable `method`, `endpoint`, `request_digest`, `summary`) and `renewal`; custom gates get `ConfirmationDeclinedException` (a `VerificationDeniedException`) exposing `getDeclined()`, `getActionSessionId()`, `getHoldUntil()`, and `getAttestationStatus()`. Agents should relay the decline to the user and not retry unless the user asks; only the user can lift a decline, and after the hold ends a retry stages a fresh confirmation. A malformed `declined` block degrades to a plain 403 with no `declined` key.
 - On an accepted retry, `$result->actionConfirmation` (`['action_session_id' => ..., 'consumed' => true]`) and the `agentadmit.action_confirmation` request attribute expose the consumed ceremony, so your own transaction step-up can avoid asking the human twice. Absent or malformed blocks are `null`, never partially populated.
 
+### Confirm each time: when the user has no passkey yet
+
+A confirmation link handed to an agent can only ask a passkey that is
+already on file to sign. When the user has no passkey for your app yet, the
+refusal says so: `confirmation.enrollment_required` is `true`, and the 403
+body tells the agent that the link alone cannot be used and that the user
+should open the request from inside your app. `false` means a passkey is on
+file and the link works as before. The key is left out when the hosted
+service did not state it. On the typed exception it is
+`ConfirmationRequiredException::isEnrollmentRequired(): ?bool` (`null` when
+not stated; only a JSON boolean is kept, nothing is coerced), and the key in
+`getConfirmation()` is present only when stated.
+
+Your app then opens the request for its signed-in user with
+`TokensClient::createOwnerLink()`. The user creates a passkey and confirms on
+the page it opens; on a computer that page can show a QR code to continue on
+the user's phone.
+
+```php
+use AgentAdmit\AgentAdmitException;
+use AgentAdmit\TokensClient;
+
+// Inside a route your signed-in user calls, not an agent-facing route.
+Route::post('/account/pending-confirmations/{actionSessionId}/open', function (string $actionSessionId) {
+    try {
+        $link = app(TokensClient::class)->createOwnerLink($actionSessionId, (string) auth()->id());
+    } catch (AgentAdmitException $e) {
+        abort($e->getStatusCode()); // 404, 409, 410, ...
+    }
+    return redirect()->away($link->ownerSessionUrl);
+})->middleware('auth');
+```
+
+Two rules:
+
+- Call it only from a route your signed-in human uses, and pass that user's
+  own id. The hosted service answers 404 when the request belongs to a
+  different user than the one you name.
+- Do not return `$link->ownerSessionUrl` to an agent, and do not log it. Send
+  it to the signed-in user's browser only. The SDK logs this call's path and
+  status only, and `var_dump` / `print_r` of the result show the URL hidden.
+
+The result is an `AgentAdmit\OwnerLink` (`actionSessionId`,
+`ownerSessionUrl`, `enrollmentRequired`, `enrollmentReason` of `no_passkey`
+or `no_eligible_authenticator` when enrollment is required, `expiresAt`). An
+id that is not an `asess_` id of at least 20 characters, or an empty user id
+or one longer than 255 characters, throws `InvalidArgumentException` before
+any request is made. Hosted errors (401 `invalid_api_key`, 403
+`api_key_not_app_linked`, 404 `not_found`, 409 `already_consumed` or
+`already_verified`, 410 `session_expired`, 429, 5xx) throw
+`AgentAdmitException` with `getStatusCode()` and `getErrorCode()`, and are not
+retried. A network failure, or a 2xx body without a string
+`owner_session_url` and a boolean `enrollment_required`, throws
+`AgentAdmitException` with status 502. Calling it again for the same request
+is safe: a new link replaces the previous one.
+
+When your app removes a user's passkeys through the API, AgentAdmit sends an
+`agentadmit.passkey_removed` webhook event (it carries `removal_id` and,
+under `data`, `app_user_id`, `credential_ids`, `removed`, `remaining`,
+`wait_sec`, `removed_at`, `reenrollment_not_before` and `removed_by`); verify
+it with the
+same `Webhook::verifySignature()` helper as every other event.
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The PHP SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  -  no changes needed in your middleware code.
