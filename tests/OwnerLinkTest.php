@@ -354,6 +354,10 @@ namespace AgentAdmit\Tests {
                 ['owner_session_url' => 'https://agentadmit.com/o#t=secret', 'enrollment_required' => 'true'],
                 'not json https://agentadmit.com/o#t=secret',
                 [],
+                // Same rule as the other five SDKs: the id and the expiry are required too.
+                ['owner_session_url' => 'https://agentadmit.com/o#t=secret', 'enrollment_required' => true, 'expires_at' => 'e'],
+                ['action_session_id' => 'x', 'owner_session_url' => 'https://agentadmit.com/o#t=secret', 'enrollment_required' => true],
+                ['action_session_id' => 7, 'owner_session_url' => 'https://agentadmit.com/o#t=secret', 'enrollment_required' => false, 'expires_at' => 'e'],
             ] as $body) {
                 Http::swap(new Factory());
                 Http::fake(['*' => Http::response($body, 201)]);
@@ -365,6 +369,23 @@ namespace AgentAdmit\Tests {
                     $this->assertStringNotContainsString('secret', $e->getMessage());
                 }
             }
+        }
+
+        public function testReasonIsKeptOnlyWithAnEnrollment(): void
+        {
+            // A stray enrollment_reason on a "passkey already on file" answer is not copied through.
+            Http::swap(new Factory());
+            Http::fake(['*' => Http::response([
+                'action_session_id' => self::SESSION,
+                'owner_session_url' => 'https://agentadmit.com/confirm/action/x',
+                'enrollment_required' => false,
+                'enrollment_reason' => 'no_passkey',
+                'expires_at' => '2026-11-20T18:30:00.000Z',
+            ], 200)]);
+            $link = $this->tokens()->createOwnerLink(self::SESSION, 'user_42');
+            $this->assertFalse($link->enrollmentRequired);
+            $this->assertNull($link->enrollmentReason);
+            $this->assertSame(self::SESSION, $link->actionSessionId);
         }
 
         public function testNeverLogsTheOwnerSessionUrl(): void

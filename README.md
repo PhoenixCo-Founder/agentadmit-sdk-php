@@ -402,9 +402,10 @@ retried. A network failure, or a 2xx body without a string
 is safe: a new link replaces the previous one.
 
 When your app removes a user's passkeys through the API, AgentAdmit sends an
-`agentadmit.passkey_removed` webhook event (fields `removal_id`,
-`app_user_id`, `credential_ids`, `removed`, `remaining`, `wait_sec`,
-`removed_at`, `reenrollment_not_before`, `removed_by`); verify it with the
+`agentadmit.passkey_removed` webhook event (it carries `removal_id` and,
+under `data`, `app_user_id`, `credential_ids`, `removed`, `remaining`,
+`wait_sec`, `removed_at`, `reenrollment_not_before` and `removed_by`); verify
+it with the
 same `Webhook::verifySignature()` helper as every other event.
 
 ## Rate Limiting

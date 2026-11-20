@@ -15,7 +15,7 @@ namespace AgentAdmit;
 final class OwnerLink
 {
     public function __construct(
-        public readonly ?string $actionSessionId,
+        public readonly string $actionSessionId,
         public readonly string $ownerSessionUrl,
         /**
          * True (201) when the user has no passkey on file for the app yet and
@@ -25,7 +25,7 @@ final class OwnerLink
         public readonly bool $enrollmentRequired,
         /** 'no_passkey' or 'no_eligible_authenticator' when enrollment is required, else null. */
         public readonly ?string $enrollmentReason,
-        public readonly ?string $expiresAt,
+        public readonly string $expiresAt,
     ) {
     }
 

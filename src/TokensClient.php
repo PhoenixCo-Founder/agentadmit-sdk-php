@@ -294,19 +294,26 @@ class TokensClient
         }
 
         $data = json_decode($response->body(), true);
+        // The result promises all four fields (the same rule in all six SDKs):
+        // a body without any of them is malformed, never a partial result.
         if (!is_array($data)
             || !is_string($data['owner_session_url'] ?? null)
-            || !is_bool($data['enrollment_required'] ?? null)) {
+            || !is_bool($data['enrollment_required'] ?? null)
+            || !is_string($data['action_session_id'] ?? null)
+            || !is_string($data['expires_at'] ?? null)) {
             Log::error("AgentAdmit createOwnerLink POST {$path} returned {$status} with a malformed body");
             throw new AgentAdmitException('createOwnerLink returned a malformed response', 502);
         }
 
         return new OwnerLink(
-            actionSessionId: is_string($data['action_session_id'] ?? null) ? $data['action_session_id'] : null,
+            actionSessionId: $data['action_session_id'],
             ownerSessionUrl: $data['owner_session_url'],
             enrollmentRequired: $data['enrollment_required'],
-            enrollmentReason: is_string($data['enrollment_reason'] ?? null) ? $data['enrollment_reason'] : null,
-            expiresAt: is_string($data['expires_at'] ?? null) ? $data['expires_at'] : null,
+            // The reason belongs to an enrollment; it is kept only then.
+            enrollmentReason: $data['enrollment_required'] && is_string($data['enrollment_reason'] ?? null)
+                ? $data['enrollment_reason']
+                : null,
+            expiresAt: $data['expires_at'],
         );
     }
 
